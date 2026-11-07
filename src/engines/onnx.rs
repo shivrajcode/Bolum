@@ -44,11 +44,11 @@ fn environment() -> Result<&'static Environment> {
     Ok(ENV.get_or_init(|| env))
 }
 
-fn session(path: &Path) -> Result<Session> {
+fn session(path: &Path, max_threads: usize) -> Result<Session> {
     let builder =
         Session::builder(environment()?).map_err(|err| anyhow!("create session builder: {err}"))?;
     let threads = std::thread::available_parallelism()
-        .map(|count| count.get().min(8))
+        .map(|count| count.get().min(max_threads))
         .unwrap_or(4);
     // Automatic provider selection chooses CoreML on macOS, which cannot
     // execute Canary's zero-length initial decoder memory. CPU is portable
@@ -56,6 +56,10 @@ fn session(path: &Path) -> Result<Session> {
     builder
         .with_auto_device(ort::session::builder::AutoDevicePolicy::PreferCPU)
         .map_err(|err| anyhow!("select CPU execution provider: {err}"))?
+        // Three sequential sessions must not keep competing CPU pools spinning
+        // while another session is running (or while the app is idle).
+        .with_intra_op_spinning(false)
+        .map_err(|err| anyhow!("disable idle thread spinning: {err}"))?
         .with_intra_threads(threads)
         .map_err(|err| anyhow!("set session threads: {err}"))?
         .commit_from_file(path)
@@ -157,9 +161,9 @@ pub struct ParakeetEngine {
 
 impl ParakeetEngine {
     pub fn load(dir: &Path) -> Result<Self> {
-        let pre = session(&dir.join("nemo128.onnx"))?;
-        let encoder = session(&dir.join("encoder-model.int8.onnx"))?;
-        let decoder = session(&dir.join("decoder_joint-model.int8.onnx"))?;
+        let pre = session(&dir.join("nemo128.onnx"), 8)?;
+        let encoder = session(&dir.join("encoder-model.int8.onnx"), 8)?;
+        let decoder = session(&dir.join("decoder_joint-model.int8.onnx"), 8)?;
         let (tokens, by_token) = read_vocab(&dir.join("vocab.txt"))?;
         let blank = *by_token
             .get("<blk>")
@@ -287,9 +291,11 @@ pub struct CanaryEngine {
 
 impl CanaryEngine {
     pub fn load(dir: &Path) -> Result<Self> {
-        let pre = session(&dir.join("nemo128.onnx"))?;
-        let encoder = session(&dir.join("encoder-model.int8.onnx"))?;
-        let decoder = session(&dir.join("decoder-model.int8.onnx"))?;
+        // Canary's autoregressive decoder benefits from smaller CPU pools;
+        // Parakeet's larger encoder keeps its existing eight-thread cap.
+        let pre = session(&dir.join("nemo128.onnx"), 4)?;
+        let encoder = session(&dir.join("encoder-model.int8.onnx"), 4)?;
+        let decoder = session(&dir.join("decoder-model.int8.onnx"), 4)?;
         let (tokens, by_token) = read_vocab(&dir.join("vocab.txt"))?;
         let (decoder_layers, decoder_hidden) = input_shape(&decoder, "decoder_mems", (6, 1024));
         Ok(Self {

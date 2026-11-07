@@ -1,5 +1,5 @@
 //! One worker owns recording and inference; commands are serialized.
-use crate::{audio, engines::Loaded, inject, models, settings::SettingsStore};
+use crate::{audio, engines::Cache, inject, models, settings::SettingsStore};
 use anyhow::{bail, Result};
 use std::sync::{mpsc, Arc, Mutex};
 
@@ -43,7 +43,7 @@ impl Controller {
             }
         }));
         std::thread::spawn(move || {
-            let mut loaded: Option<(String, Loaded)> = None;
+            let mut model_cache = Cache::default();
             let mut recording_settings = None;
             #[cfg(target_os = "macos")]
             let mut output_mute = None;
@@ -72,7 +72,7 @@ impl Controller {
                     Err(mpsc::RecvTimeoutError::Disconnected) => break,
                     Err(mpsc::RecvTimeoutError::Timeout) if listening => "stop".into(),
                     Err(mpsc::RecvTimeoutError::Timeout) => {
-                        loaded = None;
+                        model_cache = Cache::default();
                         continue;
                     }
                 };
@@ -114,6 +114,8 @@ impl Controller {
                             recording_settings = Some(config);
                             started = std::time::Instant::now();
                             status.lock().unwrap().phase = "listening";
+                            ctx.request_repaint();
+                            model_cache.prepare(model);
                         }
                         "stop" if phase == "listening" => {
                             status.lock().unwrap().phase = "working";
@@ -142,12 +144,7 @@ impl Controller {
                                 );
                             }
                             let id = config.str("model");
-                            if loaded.as_ref().is_none_or(|(current, _)| current != &id) {
-                                // Release the previous engine before allocating another model.
-                                loaded = None;
-                                loaded = Some((id.clone(), Loaded::load(models::find(&id)?)?));
-                            }
-                            let text = loaded.as_mut().unwrap().1.transcribe(samples, &config)?;
+                            let text = model_cache.get()?.transcribe(samples, &config)?;
                             let text = crate::transcript::clean(&text, &config);
                             if text.trim().is_empty() {
                                 bail!("No speech recognized");
@@ -187,7 +184,7 @@ impl Controller {
                         }
                         command if phase == "idle" && command.starts_with("delete:") => {
                             let model = models::find(&command[7..])?;
-                            loaded = None;
+                            model_cache = Cache::default();
                             models::delete(model)?;
                         }
                         _ => {}

@@ -42,3 +42,7 @@ opt-level = "s"
 lto = true
 codegen-units = 1
 strip = true
+
+# Keep compiler plugins loadable by macOS dyld; the shipped executable is stripped.
+[profile.release.build-override]
+strip = "none"

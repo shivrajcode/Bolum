@@ -1,12 +1,13 @@
 //! Development helper: transcribe a WAV file with a downloaded model.
 //!
 //! ```sh
-//! cargo run --example transcribe -- parakeet-tdt-0.6b-v3 samples/jfk.wav
+//! cargo run --release --example transcribe -- parakeet-tdt-0.6b-v3 samples/jfk.wav en 5
 //! cargo run --example transcribe -- parakeet-tdt-0.6b-v3 samples/jfk.wav
 //! cargo run --example transcribe -- canary-180m-flash samples/jfk.wav fr
 //! ```
 //!
-//! The optional third argument sets the spoken language for Canary.
+//! The optional third argument sets the spoken language for Canary; the fourth
+//! repeats inference to measure both first-use and warm latency.
 
 use anyhow::{Context, Result};
 use bolum_lib::engines::Loaded;
@@ -20,6 +21,12 @@ fn main() -> Result<()> {
         .next()
         .context("usage: transcribe <model-id> <wav-file> [language]")?;
     let language = args.next();
+    let repeats = args
+        .next()
+        .map(|s| s.parse::<usize>())
+        .transpose()?
+        .unwrap_or(1)
+        .clamp(1, 100);
 
     let model = models::find(&model_id)?;
     if !models::is_downloaded(model) {
@@ -69,9 +76,16 @@ fn main() -> Result<()> {
         settings.set_quiet("language", language.into());
     }
 
-    let mut engine = Loaded::load(model)?;
     let started = std::time::Instant::now();
-    let text = engine.transcribe(&samples, &settings)?;
-    println!("[{} ms] {text}", started.elapsed().as_millis());
+    let mut engine = Loaded::load(model)?;
+    println!("Model load: {} ms", started.elapsed().as_millis());
+    for iteration in 1..=repeats {
+        let started = std::time::Instant::now();
+        let text = engine.transcribe(&samples, &settings)?;
+        println!(
+            "Run {iteration}: [{} ms] {text}",
+            started.elapsed().as_millis()
+        );
+    }
     Ok(())
 }
