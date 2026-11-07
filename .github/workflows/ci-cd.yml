@@ -1,0 +1,118 @@
+name: Main CI/CD
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: bolum-main-delivery
+  cancel-in-progress: false
+jobs:
+  check-build:
+    name: Check and build (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            platform: macos-arm64
+          - os: windows-2022
+            platform: windows-x64
+          - os: ubuntu-24.04
+            platform: linux-checks
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Isolate test settings and model cache
+        shell: bash
+        run: |
+          echo "XDG_DATA_HOME=$RUNNER_TEMP/bolum-model-data" >> "$GITHUB_ENV"
+          echo "XDG_CONFIG_HOME=$RUNNER_TEMP/bolum-test-config" >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libx11-dev libxi-dev libxrandr-dev libxkbcommon-dev libwayland-dev libgl1-mesa-dev
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked --all-targets
+      - name: Cache speech fixtures
+        if: runner.os != 'Linux'
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.XDG_DATA_HOME }}/bolum/models
+          key: nvidia-models-${{ runner.os }}-${{ hashFiles('src/models.rs') }}
+      - name: Verify real Canary and Parakeet inference
+        if: runner.os != 'Linux'
+        run: cargo test --locked --test smoke -- --ignored --nocapture
+      - name: Package and install macOS PKG
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          test "$(uname -m)" = arm64
+          sh scripts/package-macos.sh
+          version=$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' packaging/Info.plist)
+          expected=$(cargo metadata --no-deps --format-version 1 --locked | jq -r '.packages[] | select(.name == "bolum") | .version')
+          test "$version" = "$expected"
+          cp target/bundle/Bolum-macos.zip "target/dist/Bolum-$version-macos-arm64.zip"
+      - name: Install NSIS
+        if: runner.os == 'Windows'
+        run: choco install nsis --no-progress -y
+      - name: Package, install and uninstall Windows EXE
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/package-windows.ps1
+      - name: Check Linux release build
+        if: runner.os == 'Linux'
+        run: cargo build --locked --release
+      - uses: actions/upload-artifact@v4
+        if: runner.os != 'Linux'
+        with:
+          name: installer-${{ matrix.platform }}
+          path: |
+            target/dist/*.exe
+            target/dist/*.pkg
+            target/dist/*.zip
+          if-no-files-found: error
+  publish:
+    name: Publish installers and GitHub package
+    needs: check-build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: installer-*
+          merge-multiple: true
+          path: release-assets
+      - uses: oras-project/setup-oras@v1
+        with:
+          version: 1.3.0
+      - name: Publish checked artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/publish-release.sh
+  documentation:
+    name: Deploy documentation
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+      - uses: actions/deploy-pages@v4
+        id: deploy
