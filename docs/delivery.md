@@ -7,7 +7,7 @@ path filters. Other branches, pull requests and tags do not trigger deployment.
    unit/UI tests. The macOS and Windows runners also download/cache verified model weights
    and run real Canary/Parakeet speech tests.
 2. macOS builds an ad-hoc-signed app and an unsigned PKG, installs it on the ephemeral
-   runner and checks executable startup. Windows builds with a static C runtime, makes
+   runner and checks executable startup. Windows bundles the official Microsoft C/C++ runtime DLLs, makes
    an NSIS per-user EXE installer, and tests installation, startup and uninstallation.
    Models and settings are preserved by the Windows uninstaller.
 3. Only after **all checks and installer builds pass**, the publishing job computes SHA-256

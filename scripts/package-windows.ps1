@@ -1,14 +1,21 @@
 $ErrorActionPreference = 'Stop'
-$env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS = '-C target-feature=+crt-static'
-cargo build --release --locked --target x86_64-pc-windows-msvc
+cargo build --release --locked
 if ($LASTEXITCODE -ne 0) { throw 'Windows release build failed' }
 $metadata = cargo metadata --no-deps --format-version 1 --locked | ConvertFrom-Json
 $version = ($metadata.packages | Where-Object name -eq 'bolum').version
 $name = "Bolum-$version-windows-x64"
 $stage = "target/dist/$name"
 New-Item -ItemType Directory -Force $stage | Out-Null
-Copy-Item 'target/x86_64-pc-windows-msvc/release/bolum.exe' $stage
-Get-ChildItem 'target/x86_64-pc-windows-msvc/release/*.dll' -ErrorAction SilentlyContinue | Copy-Item -Destination $stage
+Copy-Item 'target/release/bolum.exe' $stage
+Get-ChildItem 'target/release/*.dll' -ErrorAction SilentlyContinue | Copy-Item -Destination $stage
+# ONNX Runtime's prebuilt archive uses the dynamic Microsoft C/C++ runtime.
+# Ship the official redistributable DLLs beside the app for per-user installation.
+$vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+$vsRoot = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+$crt = Get-ChildItem "$vsRoot/VC/Redist/MSVC/*/x64/Microsoft.VC*.CRT" -Directory |
+    Sort-Object { [version]$_.Parent.Parent.Name } -Descending | Select-Object -First 1
+if (-not $crt) { throw 'Microsoft x64 runtime redistributable directory not found' }
+Copy-Item "$($crt.FullName)/*.dll" $stage
 Copy-Item LICENSE, THIRD_PARTY_NOTICES.txt $stage
 @'
 Bolum for Windows x64

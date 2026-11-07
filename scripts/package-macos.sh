@@ -35,6 +35,6 @@ if [ "${CI:-false}" = true ]; then
   result=$?
   set -e
   test "$result" = 1
-  rg -q 'Bolum is not running' target/dist/startup-check.log
+  /usr/bin/grep -q 'Bolum is not running' target/dist/startup-check.log
   rm target/dist/startup-check.log
 fi
