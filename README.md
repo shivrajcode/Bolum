@@ -1,223 +1,148 @@
 # Bolum
 
-<p align="center"><img src="branding/logo-full.svg" alt="bolum" width="220" /></p>
+A small, local voice dictation desktop app inspired by [Handy](https://github.com/cjpais/Handy).
+Press a global shortcut, speak, press it again, and Bolum inserts the transcript into the
+focused application. Hold-to-talk is also available.
 
-Push-to-talk dictation for macOS, Windows and Linux desktops. Press a shortcut (or run `bolum toggle`
-from a compositor keybinding), speak, and the transcript is typed into whatever window has
-focus.
-Everything runs locally: Whisper through whisper.cpp, or NVIDIA Parakeet/Canary through
-ONNX Runtime.
+The desktop interface, audio capture, shortcuts, model downloads, inference integration,
+and text insertion are written in Rust. The interface uses egui with OpenGL. There is no
+webview, JavaScript, Node, Python runtime, cloud API, or LLM cleanup service.
+NVIDIA models run locally through ONNX Runtime's CPU provider.
 
-Built in the spirit of [Handy](https://github.com/cjpais/Handy): a Tauri shell, a small
-Rust core, and a thin web UI, with the same download-and-verify model strategy.
+## Build and use
 
-## Features
+Install stable Rust (1.92+) and your platform's native build tools, then:
 
-- **Local engines** — Whisper (ggml, via whisper.cpp) and NVIDIA Parakeet TDT / Canary
-  (ONNX, int8) with SHA-256 verified downloads.
-- **Two ways to trigger** — an in-app global shortcut where the desktop allows it, plus a
-  `bolum toggle|start|stop|cancel|status|quit` control socket for compositor keybindings.
-- **Text delivery that adapts** — on macOS, native key events (CGEvent) or a clipboard
-  paste; on Linux, types with `wtype`, `kwtype`, `dotool`, `ydotool` or `xdotool`, or
-  pastes through the clipboard.
-- **Apple Silicon acceleration** — Whisper runs on the GPU through Metal on macOS.
-- **Optional LLM cleanup** — send the transcript through any OpenAI-compatible endpoint
-  (Ollama, llama.cpp, LM Studio, OpenRouter, …) before it is inserted.
-- **History** — every dictation is kept in a JSON-lines file with copy and delete from
-  the app.
-- **Tray + overlay feedback** — the tray icon and a small overlay show listening and
-  transcribing states.
+```sh
+cargo run --release
+```
 
-## Install
+Open **Models**, download one model, select **Use this model**, and focus a text field in
+another app. The default shortcut is **Control + Alt + Space**. Enable hold-to-talk if
+preferred. Downloads resume and each newly downloaded artifact is checked against its
+pinned SHA-256. The first transcription loads the model; subsequent recordings reuse it.
+Models unload after 60 seconds idle. Recordings stop automatically at two minutes.
 
-Download the latest installer from
-[Releases](https://github.com/shivraj598/Bolum/releases/latest):
-
-| Platform | File |
-| --- | --- |
-| macOS 13.4+ (Apple Silicon) | `Bolum_<version>_aarch64.dmg` |
-| Windows 10/11 (x64) | `Bolum_<version>_x64-setup.exe` |
-| Linux x86_64 with glibc 2.39+ | `Bolum_<version>_amd64.AppImage` |
-| Debian 13 / Ubuntu 24.04+ | `Bolum_<version>_amd64.deb` |
-
-Every push to `main` that passes the tests replaces these files with a fresh build, and
-each version tag keeps its own release.
-
-**macOS:** open the `.dmg` and drag Bolum to Applications. The app is not signed with an
-Apple Developer ID yet, so the first launch is blocked. Open **System Settings → Privacy &
-Security** and click **Open Anyway**, or run
-`xattr -dr com.apple.quarantine /Applications/Bolum.app`.
-
-**Windows:** run the setup `.exe`. It isn't code-signed yet, so SmartScreen may warn; choose
-**More info → Run anyway**. The installer fetches the WebView2 runtime if it is missing.
-Bolum lives in the notification area.
-
-**Linux:** `chmod +x Bolum_*.AppImage && ./Bolum_*.AppImage`, or
-`sudo apt install ./Bolum_*_amd64.deb`.
-
-To build from source instead, see [Build and run](#build-and-run).
-
-## Requirements
+The window displays errors and the last transcript, which can be copied if insertion fails.
+Transcripts and recordings are not written to disk. Paste mode replaces the system clipboard.
+Closing the window quits the app; **Hide to tray** keeps it running on macOS and Windows.
+Linux currently uses the normal window/minimize controls rather than a system tray.
 
 ### macOS
 
-- macOS 13.4 or later (Apple Silicon, or Intel when building from source)
-- Rust (stable), Node.js 20+ and `cmake` (`brew install rust node cmake`)
-- Xcode Command Line Tools (`xcode-select --install`)
+Install Xcode Command Line Tools (`xcode-select --install`). Build a Finder-launchable app:
 
-On first launch macOS asks for **Microphone** and **Accessibility** access (System
-Settings → Privacy & Security → Accessibility); the latter lets Bolum insert text into
-other apps. Bolum lives in the menu bar and has no Dock icon.
+```sh
+sh scripts/package-macos.sh
+open target/bundle/Bolum.app
+```
+
+The script creates an ad-hoc signed `.app` and ZIP. For distribution to other machines,
+Developer ID signing and notarization are still needed. The bundle declares microphone
+usage. Allow Microphone and Accessibility access under System Settings → Privacy & Security.
+When running via Cargo, macOS may associate permissions with the terminal instead.
+The configured deployment target is macOS 13.4; compatibility with the oldest target still
+needs testing on that OS.
 
 ### Windows
 
-- Windows 10 or 11 (x64)
-- Rust (stable, MSVC toolchain), Node.js 20+, `cmake` and LLVM (for whisper.cpp's bindings),
-  plus the Visual Studio C++ build tools
-
-Text is typed or pasted with native key events, so no extra tools or permissions are needed.
+Use the MSVC Rust toolchain and Visual Studio C++ Build Tools. Build with
+`cargo build --release`; the executable is `target/release/bolum.exe`. No WebView2 is needed.
+The CI artifact also collects any runtime DLLs produced by the build.
 
 ### Linux
 
-- Wayland or X11 session
-- Rust (stable) and Node.js 20+
-- `cmake` (whisper.cpp build), plus GTK/WebKitGTK development packages for Tauri
-- One typing tool on `PATH`: `wtype` (Wayland), `xdotool`, `ydotool`, `dotool` or `kwtype`
-- One clipboard tool: `wl-copy`, `xclip` or `xsel`
-
-On Arch:
+On Debian/Ubuntu install native build dependencies:
 
 ```sh
-sudo pacman -S base-devel cmake webkit2gtk-4.1 gtk3 libappindicator-gtk3 librsvg wtype wl-clipboard
+sudo apt install build-essential pkg-config libasound2-dev libx11-dev libxi-dev libxrandr-dev libxkbcommon-dev libwayland-dev libgl1-mesa-dev
 ```
 
-## Build and run
-
-```sh
-npm ci --include=dev                  # install from the lockfile, including the Tauri CLI
-NODE_ENV=development npm run tauri dev
-npm run tauri build                   # release bundles in src-tauri/target/release/bundle
-                                      #   macOS: Bolum.app + .dmg   Linux: AppImage + .deb
-```
-
-`tauri dev` starts Vite on `http://localhost:1420` and launches the app. The web UI reloads
-on save, and Rust changes rebuild and relaunch the app. The first run compiles whisper.cpp
-and ONNX Runtime, so expect it to take a few minutes. Add `RUST_LOG=debug RUST_BACKTRACE=1`
-for verbose logs. `--include=dev` and `NODE_ENV=development` are needed only if your shell
-exports `NODE_ENV=production`, which makes npm skip dev dependencies.
-
-Bolum has no Dock icon. Dev builds open the main window on launch. Release builds stay
-hidden in the menu bar unless it is the first run or "start hidden" is off; to open the
-window, click the Bolum icon in the menu bar and choose **Settings…**.
-
-On macOS in dev mode, Microphone and Accessibility access are granted to the app that runs
-the command (Terminal, VS Code, …), not to Bolum.
-
-## Testing
-
-```sh
-npm run check        # everything CI runs on each push: types, web tests, build, clippy, Rust tests
-npm test             # web UI unit tests (Vitest)
-npm run test:rust    # Rust unit tests: catalog, downloads, settings, audio, ONNX decoding, LLM client
-npm run test:smoke   # end to end: download Whisper Tiny, verify its SHA-256, transcribe a fixture
-```
-
-The smoke test needs the network and a 44 MB download, so `test:rust` skips it. It keeps
-its files under `src-tauri/target/tmp/smoke` (or `BOLUM_SMOKE_DIR`) and never touches your
-real models or settings.
-
-[GitHub Actions](.github/workflows/ci.yml) runs the web suite and the Rust suite on macOS,
-Linux and Windows for every push and pull request. Pushes also run the smoke test against
-the live model host. When a push to `main` passes all of it, the pipeline builds the macOS
-`.dmg`, the Windows `.exe` and the Linux AppImage and `.deb`, and publishes them as the
-**latest** release. A `v*` tag publishes the same files as a permanent release for that
-version.
-
-## Usage
-
-Start Bolum (it stays in the tray; the settings window opens on first run):
-
-```sh
-bolum            # the GUI/tray process
-bolum toggle     # ask the running instance to start/stop dictation
-bolum status     # idle | listening | working
-```
-
-On macOS the default shortcut is **⌃⌥Space** (Control-Option-Space); change it in the
-Dictation tab. To use the CLI, link the binary onto your `PATH`:
-
-```sh
-ln -s /Applications/Bolum.app/Contents/MacOS/bolum /usr/local/bin/bolum
-```
-
-Hyprland keybinding:
+Install `wtype` for Wayland or `xdotool` for X11 for typing. Paste/copy also needs
+`wl-clipboard`, `xclip`, or `xsel`. Other supported typing tools are `dotool`, `ydotool`,
+and `kwtype`. Global shortcut registration supports X11; on Wayland bind the CLI in your
+compositor, for example in Hyprland:
 
 ```ini
-exec-once = bolum
-bind = SUPER, D, exec, bolum toggle
+exec-once = /absolute/path/to/bolum
+bind = SUPER, D, exec, /absolute/path/to/bolum toggle
 ```
 
-Open the **Models** tab, download a model, and press **use**. Then dictate with the
-**Dictate** button, the configured shortcut, or `bolum toggle`.
+The ONNX prebuilt runtime may require a recent glibc; CI builds on Ubuntu 24.04.
 
-## Models
+## Models and application size
 
-Recommended models come first in the Models tab; the rest are listed smallest first.
+Weights download separately into `~/.local/share/bolum/models` (Windows:
+`%LOCALAPPDATA%/bolum/models`). They are excluded from the app bundle. Existing NVIDIA
+model downloads from the previous version can be reused.
 
-| Model | Engine | Size | Languages | |
-| --- | --- | --- | --- | --- |
-| Whisper Base (English) | whisper.cpp | ~60 MB | English | recommended, default |
-| NVIDIA Parakeet TDT 0.6B v2 | ONNX int8 | ~661 MB | English | recommended |
-| NVIDIA Parakeet TDT 0.6B v3 | ONNX int8 | ~670 MB | 25 European languages | recommended |
-| Whisper Tiny (English) | whisper.cpp | ~44 MB | English | fastest |
-| Whisper Base (multilingual) | whisper.cpp | ~60 MB | 99 languages | |
-| NVIDIA Canary 180M Flash | ONNX int8 | ~213 MB | en, de, es, fr (+ translation) | |
-| Whisper Small (English) | whisper.cpp | ~190 MB | English | |
-| Whisper Small (multilingual) | whisper.cpp | ~190 MB | 99 languages | |
-| Whisper Large v3 Turbo | whisper.cpp | ~574 MB | 99 languages | most accurate Whisper |
+- **Canary 180M Flash**, approximately 213 MB: English, German, Spanish, French. Select the
+  spoken language explicitly. This is the smallest model offered.
+- **Parakeet TDT 0.6B v3**, approximately 670 MB: automatic recognition across 25 European
+  languages; the default selection.
+- **Parakeet TDT 0.6B v2**, approximately 661 MB: English.
 
-The accuracy and speed bars on each card are relative guides, not benchmark results.
+These are community int8 ONNX exports of NVIDIA models. Size is the total of the catalog
+artifacts in decimal MB. CPU inference avoids shipping CUDA, PyTorch, or NeMo. Release
+builds use size optimization, LTO, one codegen unit, and stripped symbols. ONNX Runtime
+is still a substantial native dependency, so model size and app size must be reported
+separately. Measure a build with `wc -c target/release/bolum` and `du -sh target/bundle/Bolum.app`.
+The verified local Apple Silicon release executable is 24,850,896 bytes (about 25 MB);
+the macOS app bundle is approximately the same size, excluding models. Other platforms
+need their own measurements. Actual memory use during inference is larger than the model files.
 
-Weights are fetched from Hugging Face and verified against the SHA-256 recorded in
-[`src-tauri/src/models.rs`](src-tauri/src/models.rs) before use. Parakeet and Canary use
-the ONNX conversions published by [istupakov](https://huggingface.co/istupakov) in the
-[`onnx-asr`](https://github.com/istupakov/onnx-asr) project, built on NVIDIA's
-[Parakeet v2](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2),
-[Parakeet v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) and
-[Canary](https://huggingface.co/nvidia/canary-180m-flash) checkpoints (CC-BY-4.0).
+Settings are stored in `~/.config/bolum/settings.json`, or `%APPDATA%/bolum/settings.json`.
+`XDG_CONFIG_HOME` and `XDG_DATA_HOME` override these locations on all platforms. Old Whisper
+selections migrate to Parakeet v3. Obsolete settings are discarded when saving; existing
+history and unused weights are left on disk for the user to remove if desired.
 
-## Branding
+## CLI and verification
 
-Logos and icons live in [`branding/`](branding/). Replace a file there and run
-`npm run icons` to regenerate the app icon set and the menu-bar icons. The
-[branding guide](branding/README.md) lists which file goes where.
+```sh
+bolum toggle                 # queue start/stop in the running desktop app
+bolum start
+bolum stop
+bolum cancel                 # cancel a recording
+bolum status                 # idle | listening | working
+bolum show
+bolum quit
 
-## How it works
-
+cargo fmt --check
+cargo clippy --locked --all-targets -- -D warnings
+cargo test --locked --all-targets
 ```
-shortcut / `bolum toggle`
-        │
-        ▼
-  cpal capture ──► 16 kHz mono ──► engine ──► (LLM cleanup) ──► typing tool
-   (audio.rs)                    (engines/)    (postprocess.rs)   (inject.rs)
+
+A real inference test downloads Canary and Parakeet v3 into an isolated directory, verifies
+the artifacts, and checks that both recognize the speech fixture:
+
+```sh
+XDG_DATA_HOME=/tmp/bolum-smoke-data XDG_CONFIG_HOME=/tmp/bolum-smoke-config \
+  cargo test --test smoke -- --ignored --nocapture
 ```
 
-- `src-tauri/src/settings.rs` — JSON settings store
-- `src-tauri/src/audio.rs` — microphone capture, resampling, WAV writing
-- `src-tauri/src/models.rs` — catalog, verified downloads, progress events
-- `src-tauri/src/engines/` — Whisper (whisper-rs) and NeMo ONNX (ort) transcription
-- `src-tauri/src/pipeline.rs` — the dictation state machine
-- `src-tauri/src/ipc.rs` — the control socket
-- `src/` — the settings window and overlay (vanilla TypeScript + Vite)
-- `branding/` — logo, app-icon and menu-bar icon sources
+To transcribe an existing WAV with a downloaded model:
 
-## Credits
+```sh
+cargo run --release --example transcribe -- canary-180m-flash tests/fixtures/quick-brown-fox.wav en
+```
 
-- [whisper.cpp](https://github.com/ggml-org/whisper.cpp) and
-  [whisper-rs](https://github.com/tazz4843/whisper-rs) for local Whisper inference.
-- [onnx-asr](https://github.com/istupakov/onnx-asr) for the NVIDIA ONNX export contracts.
-- NVIDIA for the Parakeet and Canary model checkpoints.
+CI checks formatting, lint, tests, and release compilation on macOS, Windows, and Linux.
+It uploads build artifacts; it does not automatically publish releases. Live microphone,
+shortcut, permissions, and insertion behavior need an interactive test on each platform.
 
-## License
+## Architecture and research
 
-MIT — see [LICENSE](LICENSE).
+`src/ui.rs` is the Rust window and tray; `pipeline.rs` serializes dictation on one worker;
+`audio.rs` captures mono speech and resamples to 16 kHz; `engines/onnx.rs` runs the NVIDIA
+graphs; `models.rs` contains the catalog and resumable downloader; `inject.rs` inserts
+text; `ipc.rs` exposes a local socket/named pipe for compositor shortcuts.
+
+The scope follows [Handy's local dictation workflow](https://github.com/cjpais/Handy),
+with a Rust UI replacing its web frontend. The model choices follow NVIDIA's
+[Canary 180M Flash model card](https://huggingface.co/nvidia/canary-180m-flash) and
+[Parakeet v3 model card](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3).
+Graph interfaces and decoding follow [onnx-asr](https://github.com/istupakov/onnx-asr),
+using [istupakov's ONNX exports](https://huggingface.co/istupakov).
+CPU selection is explicit: automatic CoreML selection fails on Canary's zero-length
+initial decoder cache. NVIDIA model weights are licensed CC-BY-4.0; the application is
+MIT licensed, see [LICENSE](LICENSE).
