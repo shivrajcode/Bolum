@@ -52,6 +52,8 @@ pub struct Screen {
     pub outputs: Vec<String>,
     pub models: Vec<ModelView>,
     pub tray_available: bool,
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub accessibility_ready: bool,
 }
 pub enum Action {
     Save(SettingsStore),
@@ -596,6 +598,17 @@ impl View {
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(p.bg).inner_margin(28))
             .show(ctx, |ui| {
+                #[cfg(target_os = "macos")]
+                if !screen.accessibility_ready && screen.settings.str("injection") != "none" {
+                    group(ui, p, |ui| {
+                        ui.label("Allow automatic pasting");
+                        ui.label("Enable Bolum in Privacy & Security → Accessibility. Until then, dictation is copied to the clipboard for manual pasting.");
+                        if ui.button("Enable automatic pasting").clicked() {
+                            actions.push(Action::Permissions("accessibility"));
+                        }
+                    });
+                    ui.add_space(8.0);
+                }
                 if !screen.status.notice.is_empty() {
                     group(ui, p, |ui| {
                         ui.label(&screen.status.notice);
@@ -734,7 +747,7 @@ impl View {
             muted(
                 ui,
                 p,
-                "A sample stays in Bolum. It never types or pastes into another app.",
+                "A sample stays in Bolum. To dictate into another app, place your cursor there and press your transcription shortcut to start and stop.",
             );
             if ui
                 .add_enabled(

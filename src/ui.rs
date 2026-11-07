@@ -41,6 +41,8 @@ struct Desktop {
     view: View,
     events: mpsc::Receiver<GlobalHotKeyEvent>,
     last_transcript: String,
+    accessibility_ready: bool,
+    permission_checked: std::time::Instant,
     #[cfg(any(target_os = "macos", windows))]
     tray: Option<tray_icon::TrayIcon>,
     #[cfg(any(target_os = "macos", windows))]
@@ -83,6 +85,8 @@ impl Desktop {
             },
             events,
             last_transcript: String::new(),
+            accessibility_ready: inject::accessibility_ready(),
+            permission_checked: std::time::Instant::now(),
             #[cfg(any(target_os = "macos", windows))]
             tray,
             #[cfg(any(target_os = "macos", windows))]
@@ -255,6 +259,11 @@ impl eframe::App for Desktop {
         self.controller.shutdown();
     }
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if self.permission_checked.elapsed() >= std::time::Duration::from_secs(1) {
+            self.accessibility_ready = inject::accessibility_ready();
+            self.permission_checked = std::time::Instant::now();
+        }
+        ctx.request_repaint_after(std::time::Duration::from_secs(1));
         while let Ok(event) = self.events.try_recv() {
             if self.cancel_hotkey.is_some_and(|key| key.id() == event.id) {
                 if event.state == HotKeyState::Pressed {
@@ -365,6 +374,7 @@ impl eframe::App for Desktop {
             let _ = tray.set_tooltip(Some(format!("Bolum — {}", status.phase)));
         }
         let mut screen = Screen {
+            accessibility_ready: self.accessibility_ready,
             settings: self.controller.settings.lock().unwrap().clone(),
             status,
             microphones: self.microphones.clone(),

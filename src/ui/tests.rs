@@ -39,6 +39,7 @@ fn fixture() -> State {
                 })
                 .collect(),
             tray_available: true,
+            accessibility_ready: true,
         },
         actions: Vec::new(),
         configured: false,
@@ -87,6 +88,30 @@ fn navigation_setup_and_footer_model_selection() {
     h.get_by_label_contains("Parakeet TDT 0.6B v3").click();
     h.run();
     assert_eq!(h.state().view.page, Page::Models);
+}
+
+#[test]
+#[cfg(target_os = "macos")]
+fn missing_paste_permission_has_action_and_disappears_when_granted() {
+    let mut state = fixture();
+    state.screen.accessibility_ready = false;
+    let mut h = harness(state, [760.0, 560.0]);
+    click(&mut h, "Enable automatic pasting");
+    assert!(h
+        .state()
+        .actions
+        .iter()
+        .any(|a| matches!(a, Action::Permissions("accessibility"))));
+    h.state_mut().screen.accessibility_ready = true;
+    h.run();
+    assert!(h.query_by_label("Enable automatic pasting").is_none());
+    h.state_mut().screen.accessibility_ready = false;
+    h.state_mut()
+        .screen
+        .settings
+        .set_quiet("injection", "none".into());
+    h.run();
+    assert!(h.query_by_label("Enable automatic pasting").is_none());
 }
 #[test]
 fn captures_valid_shortcuts_rejects_plain_keys_and_supports_reset() {

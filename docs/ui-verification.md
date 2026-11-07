@@ -31,8 +31,8 @@ features.
 
 ## Automated checks
 
-`cargo test --locked --all-targets`: **40 passed**, with the GPU review and real-download
-integration tests opt-in. UI coverage includes ten interaction workflows plus the runtime
+`cargo test --locked --all-targets`: **42 passed**, with the GPU review and real-download
+integration tests opt-in. UI coverage includes eleven interaction workflows plus the runtime
 shortcut mode transitions. The production view is tested using actual pointer/keyboard
 events and accessibility queries, without OS or network side effects:
 
@@ -48,6 +48,7 @@ events and accessibility queries, without OS or network side effects:
 | History | Empty state, latest transcript, copy/delete/clear action routing |
 | Appearance/About | Light/dark/system, permissions, source and data-folder actions |
 | Window/keyboard | Hide/quit shortcuts, Escape, notices and minimum-width recording controls |
+| Paste permissions | Missing-permission action, banner removal after grant, show-only bypass |
 
 Settings regression tests verify that a saved microphone choice survives reload and that
 invalid null values do not erase typed defaults. Transcription helper tests verify exact
@@ -92,7 +93,8 @@ bounded wait to avoid hanging quit during model inference.
 ## Model inference
 
 The opt-in integration test passes for Canary 180M Flash and Parakeet v3. Both recognize
-“The quick brown fox jumps over the lazy dog.” from the fixture.
+“The quick brown fox jumps over the lazy dog.” from the fixture. It also verifies that
+preloading, switching engines, and repeated dictations reuse the prepared model correctly.
 
 ```sh
 XDG_DATA_HOME=/tmp/bolum-smoke-data XDG_CONFIG_HOME=/tmp/bolum-smoke-config \
@@ -101,8 +103,11 @@ XDG_DATA_HOME=/tmp/bolum-smoke-data XDG_CONFIG_HOME=/tmp/bolum-smoke-config \
 
 ## Limits
 
-Cross-application typing/pasting still needs validation after granting Bolum Accessibility
-access. Native permission-denial/recovery, feedback tone routing across different hardware,
+Cross-application typing/pasting still needs validation after granting the current Bolum
+build Accessibility access. The running bundle reports `accessibility_ready: false`, even
+after the first enable attempt and restart. The user deferred removing the stale entry and
+adding the current ad-hoc-signed bundle. Successful paste and overlay focus restoration
+must therefore not be described as verified. Feedback tone routing across different hardware,
 non-English translation accuracy, and Windows/Linux live windows are not fully validated
 here. The interface and decoder routing are tested; this does not establish recognition
 accuracy for every language or microphone. macOS 13.4 compatibility needs that OS.

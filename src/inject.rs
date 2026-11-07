@@ -12,6 +12,76 @@ use std::process::{Command, Stdio};
 
 use crate::settings::SettingsStore;
 
+/// Capture before the recording overlay can take focus. Never redirect a
+/// transcript to a different application if the user switches away mid-recording.
+#[derive(Default)]
+pub struct Target {
+    #[cfg(target_os = "macos")]
+    pid: Option<i32>,
+}
+impl Target {
+    pub fn capture() -> Self {
+        Self {
+            #[cfg(target_os = "macos")]
+            pid: frontmost_pid().filter(|pid| *pid != std::process::id() as i32),
+        }
+    }
+    fn restore(&self) -> Result<()> {
+        #[cfg(target_os = "macos")]
+        {
+            use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication};
+            let pid = self.pid.ok_or_else(|| {
+                anyhow!("Place the cursor in another app and start dictation with your shortcut")
+            })?;
+            let current = frontmost_pid();
+            if current == Some(pid) {
+                return Ok(());
+            }
+            if current != Some(std::process::id() as i32) {
+                return Err(anyhow!("The focused app changed during dictation. Paste with Command-V where you want the text"));
+            }
+            let app = NSRunningApplication::runningApplicationWithProcessIdentifier(pid)
+                .ok_or_else(|| anyhow!("The dictation app was closed"))?;
+            // Restore only when Bolum itself stole focus (e.g. the Finish button).
+            if app.activateWithOptions(NSApplicationActivationOptions::empty()) {
+                for _ in 0..30 {
+                    if frontmost_pid() == Some(pid) {
+                        return Ok(());
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+            }
+            Err(anyhow!(
+                "Could not focus the dictation app. Paste with Command-V"
+            ))
+        }
+        #[cfg(not(target_os = "macos"))]
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn frontmost_pid() -> Option<i32> {
+    objc2_app_kit::NSWorkspace::sharedWorkspace()
+        .frontmostApplication()
+        .map(|app| app.processIdentifier())
+}
+
+/// A read-only check: only the explicit permission action opens Apple's prompt.
+pub fn accessibility_ready() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        #[link(name = "ApplicationServices", kind = "framework")]
+        unsafe extern "C" {
+            fn AXIsProcessTrusted() -> bool;
+        }
+        // No arguments or borrowed pointers; this only queries our own process.
+        unsafe { AXIsProcessTrusted() }
+    }
+    #[cfg(not(target_os = "macos"))]
+    true
+}
+
 #[cfg(not(any(target_os = "macos", windows)))]
 const TOOLS: [&str; 5] = ["wtype", "kwtype", "dotool", "ydotool", "xdotool"];
 #[cfg(any(target_os = "macos", windows))]
@@ -141,7 +211,7 @@ pub fn copy_to_clipboard(text: &str) -> Result<()> {
 }
 
 /// Sends `text` to the focused window using the configured strategy.
-pub fn inject(text: &str, settings: &SettingsStore) -> Result<()> {
+pub fn inject(text: &str, settings: &SettingsStore, target: &Target) -> Result<()> {
     let text = text.trim();
     if text.is_empty() {
         return Ok(());
@@ -154,26 +224,44 @@ pub fn inject(text: &str, settings: &SettingsStore) -> Result<()> {
     if mode == "none" {
         return Ok(());
     }
-    let tool = resolve_tool(settings)?;
-    match mode.as_str() {
-        "clipboard" => {
+    let result = (|| {
+        let tool = resolve_tool(settings)?;
+        if mode == "clipboard" {
             write_clipboard(&payload)?;
-            std::thread::sleep(std::time::Duration::from_millis(80));
-            send_key(tool, "paste")?;
-            if settings.bool("auto_submit") {
-                std::thread::sleep(std::time::Duration::from_millis(100));
-                send_key(tool, "enter")?;
-            }
-            Ok(())
         }
-        _ => {
-            type_text(tool, &payload)?;
-            if settings.bool("auto_submit") {
-                send_key(tool, "enter")?;
-            }
-            Ok(())
+        if !accessibility_ready() {
+            return Err(anyhow!("Enable Bolum in System Settings → Privacy & Security → Accessibility, then try the shortcut again"));
         }
+        target.restore()?;
+        match mode.as_str() {
+            "clipboard" => {
+                send_key(tool, "paste")?;
+                if settings.bool("auto_submit") {
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    send_key(tool, "enter")?;
+                }
+                Ok(())
+            }
+            "type" => {
+                type_text(tool, &payload)?;
+                if settings.bool("auto_submit") {
+                    send_key(tool, "enter")?;
+                }
+                Ok(())
+            }
+            _ => Err(anyhow!("Unknown insertion method: {mode}")),
+        }
+    })();
+    if let Err(err) = result {
+        // Keep the result usable even when macOS blocks synthetic input.
+        return match write_clipboard(&payload) {
+            Ok(()) => Err(anyhow!("Transcript copied, but not pasted. {err:#}")),
+            Err(copy_err) => Err(anyhow!(
+                "Text is available in History. {err:#}. Clipboard: {copy_err}"
+            )),
+        };
     }
+    Ok(())
 }
 
 /// Prompts for the Accessibility permission up front so the first dictation
@@ -197,7 +285,11 @@ mod native {
     const PASTE_MODIFIER: Key = Key::Control;
 
     fn connect() -> Result<Enigo> {
-        Enigo::new(&Settings::default()).map_err(|err| {
+        Enigo::new(&Settings {
+            open_prompt_to_get_permissions: false,
+            ..Settings::default()
+        })
+        .map_err(|err| {
             if cfg!(target_os = "macos") {
                 anyhow!(
                     "{err}; allow Bolum under System Settings → Privacy & Security → Accessibility"
@@ -210,7 +302,9 @@ mod native {
 
     #[cfg(target_os = "macos")]
     pub fn request_permissions() -> Result<()> {
-        connect().map(drop)
+        Enigo::new(&Settings::default())
+            .map(drop)
+            .map_err(Into::into)
     }
 
     pub fn type_text(text: &str) -> Result<()> {
@@ -261,5 +355,21 @@ mod native {
         arboard::Clipboard::new()
             .and_then(|mut clipboard| clipboard.set_text(text))
             .map_err(|err| anyhow!("clipboard: {err}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preview_and_empty_results_do_not_need_permissions_target_or_typing_tool() {
+        let mut settings = SettingsStore::load_defaults();
+        settings.set_quiet("typing_tool", "missing-tool".into());
+        settings.set_quiet("injection", "none".into());
+        settings.set_quiet("auto_submit", true.into());
+        assert!(inject("Sample stays local", &settings, &Target::default()).is_ok());
+        settings.set_quiet("injection", "clipboard".into());
+        assert!(inject(" \n", &settings, &Target::default()).is_ok());
     }
 }

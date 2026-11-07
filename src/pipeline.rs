@@ -10,6 +10,7 @@ pub struct Status {
     pub transcript: String,
     pub level: f32,
     pub history: Vec<crate::transcript::Entry>,
+    pub transcription_ms: Option<u64>,
 }
 enum Command {
     Text(String),
@@ -45,6 +46,7 @@ impl Controller {
         std::thread::spawn(move || {
             let mut model_cache = Cache::default();
             let mut recording_settings = None;
+            let mut target = inject::Target::default();
             #[cfg(target_os = "macos")]
             let mut output_mute = None;
             let mut started = std::time::Instant::now();
@@ -97,6 +99,7 @@ impl Controller {
                             if !models::is_downloaded(model) {
                                 bail!("Download {} in Models first", model.name);
                             }
+                            target = inject::Target::capture();
                             recorder.start(config.opt_str("microphone"))?;
                             if config.bool("audio_feedback") {
                                 audio::feedback(
@@ -114,10 +117,12 @@ impl Controller {
                             recording_settings = Some(config);
                             started = std::time::Instant::now();
                             status.lock().unwrap().phase = "listening";
+                            status.lock().unwrap().notice.clear();
                             ctx.request_repaint();
                             model_cache.prepare(model);
                         }
                         "stop" if phase == "listening" => {
+                            let stopped = std::time::Instant::now();
                             status.lock().unwrap().phase = "working";
                             ctx.request_repaint();
                             #[cfg(target_os = "macos")]
@@ -144,7 +149,10 @@ impl Controller {
                                 );
                             }
                             let id = config.str("model");
-                            let text = model_cache.get()?.transcribe(samples, &config)?;
+                            let engine = model_cache.get()?;
+                            let inference = std::time::Instant::now();
+                            let text = engine.transcribe(samples, &config)?;
+                            let inference_ms = inference.elapsed().as_millis() as u64;
                             let text = crate::transcript::clean(&text, &config);
                             if text.trim().is_empty() {
                                 bail!("No speech recognized");
@@ -153,6 +161,7 @@ impl Controller {
                             {
                                 let mut state = status.lock().unwrap();
                                 state.transcript = text.clone();
+                                state.transcription_ms = Some(inference_ms);
                                 state.history.insert(
                                     0,
                                     crate::transcript::Entry {
@@ -170,7 +179,17 @@ impl Controller {
                                     config.usize("history_limit"),
                                 );
                             }
-                            inject::inject(&text, &config)?;
+                            let delivery = inject::inject(&text, &config, &target);
+                            log::info!("Dictation: model={id}, audio_ms={}, inference_ms={inference_ms}, stop_to_delivery_ms={}, delivered={}", samples.len() * 1000 / audio::TARGET_RATE as usize, stopped.elapsed().as_millis(), delivery.is_ok());
+                            if delivery.is_err() {
+                                // A hidden error is useless when dictating into another app.
+                                ctx.send_viewport_cmd(eframe::egui::ViewportCommand::Visible(true));
+                                ctx.send_viewport_cmd(eframe::egui::ViewportCommand::Minimized(
+                                    false,
+                                ));
+                                ctx.send_viewport_cmd(eframe::egui::ViewportCommand::Focus);
+                            }
+                            delivery?;
                             status.lock().unwrap().phase = "idle";
                         }
                         "cancel" if phase == "listening" => {

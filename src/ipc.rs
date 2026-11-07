@@ -31,6 +31,19 @@ pub fn spawn_server(
 ) {
     let handler: Handler = Arc::new(move |command| match command.as_str() {
         "status" => controller.status.lock().unwrap().phase.to_string(),
+        "diagnostics" => {
+            let config = controller.settings.lock().unwrap().clone();
+            let status = controller.status.lock().unwrap();
+            serde_json::json!({
+                "phase": status.phase,
+                "accessibility_ready": crate::inject::accessibility_ready(),
+                "injection": config.str("injection"),
+                "model": config.str("model"),
+                "transcription_ms": status.transcription_ms,
+                "notice": status.notice,
+            })
+            .to_string()
+        }
         "show" => {
             ctx.send_viewport_cmd(eframe::egui::ViewportCommand::Visible(true));
             ctx.send_viewport_cmd(eframe::egui::ViewportCommand::Minimized(false));
@@ -178,7 +191,7 @@ mod transport {
 pub fn is_control_command(argument: &str) -> bool {
     matches!(
         argument,
-        "toggle" | "start" | "stop" | "cancel" | "status" | "quit" | "show"
+        "toggle" | "start" | "stop" | "cancel" | "status" | "diagnostics" | "quit" | "show"
     )
 }
 
@@ -188,7 +201,15 @@ mod tests {
 
     #[test]
     fn recognises_every_control_command() {
-        for command in ["toggle", "start", "stop", "cancel", "status", "quit"] {
+        for command in [
+            "toggle",
+            "start",
+            "stop",
+            "cancel",
+            "status",
+            "diagnostics",
+            "quit",
+        ] {
             assert!(
                 is_control_command(command),
                 "{command} should be a control command"

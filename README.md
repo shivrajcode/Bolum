@@ -20,7 +20,8 @@ cargo run --release
 Open **Models**, download one model, select **Use model**, and focus a text field in
 another app. The default shortcut is **Control + Alt + Space**. Enable hold-to-talk if
 preferred. Downloads resume and each newly downloaded artifact is checked against its
-pinned SHA-256. The first transcription loads the model; subsequent recordings reuse it.
+pinned SHA-256. Model loading starts in the background as soon as recording begins;
+subsequent recordings reuse it. Stop and Cancel remain available during loading.
 Models unload after 60 seconds idle by default; change this in Advanced. Recordings stop
 automatically at two minutes. Auto shortcut mode supports a tap to toggle or a hold to talk.
 
@@ -38,6 +39,10 @@ after insertion, energy-based quiet-edge trimming, English filler removal, exact
 corrections, and the session-history limit. No extra cloud service is involved.
 
 The window displays errors and the last transcript, which can be copied if insertion fails.
+On macOS, **Enable automatic pasting** opens Accessibility setup when permission is missing.
+If macOS blocks insertion, Bolum copies the transcript and shows the recovery message.
+Clicking Finish in the overlay restores the app where dictation started. If you switch to
+a different app yourself, Bolum leaves the result on the clipboard instead of typing there.
 Transcripts and recordings are not written to disk. History keeps up to 20 entries in memory
 by default (configurable up to 100, or Off); quitting clears it. Paste mode replaces the system clipboard.
 Closing the window quits the app; **Hide to tray** keeps it running on macOS and Windows.
@@ -59,6 +64,9 @@ The script creates an ad-hoc signed `.app` and ZIP. For distribution to other ma
 Developer ID signing and notarization are still needed. The bundle declares microphone
 usage. Allow Microphone and Accessibility access under System Settings → Privacy & Security.
 When running via Cargo, macOS may associate permissions with the terminal instead.
+Locally rebuilt, ad-hoc-signed apps may need their old Accessibility entry removed and the
+current `target/bundle/Bolum.app` added again. `bolum diagnostics` reports permission state,
+insertion mode, model, and the last inference time without exposing transcript text.
 The configured deployment target is macOS 13.4; compatibility with the oldest target still
 needs testing on that OS.
 
