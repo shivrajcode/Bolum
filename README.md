@@ -1,5 +1,7 @@
 # Bolum
 
+[Download version 1](https://github.com/shivrajcode/Bolum/releases) · [Documentation](https://shivrajcode.github.io/Bolum/)
+
 A small, local voice dictation desktop app inspired by [Handy](https://github.com/cjpais/Handy).
 Press a global shortcut, speak, press it again, and Bolum inserts the transcript into the
 focused application. Hold-to-talk is also available.
