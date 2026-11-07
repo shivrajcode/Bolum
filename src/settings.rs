@@ -33,10 +33,15 @@ pub fn runtime_dir() -> PathBuf {
 }
 pub fn defaults() -> Value {
     json!({
-        "hotkey": "ctrl+alt+space", "push_to_talk": false, "microphone": null,
+        "hotkey": "ctrl+alt+space", "microphone": null,
         "model": "parakeet-tdt-0.6b-v3", "language": "en",
         "injection": if cfg!(any(target_os="macos", windows)) { "clipboard" } else { "type" },
-        "typing_tool": "auto", "append_trailing_space": true
+        "typing_tool": "auto", "append_trailing_space": true,
+        "theme": "system", "start_hidden": false, "show_overlay": true,
+        "unload_seconds": 60, "history_limit": 20, "translate_english": false,
+        "auto_submit": false, "remove_fillers": false, "word_replacements": "",
+        "shortcut_mode": "toggle", "audio_feedback": false, "feedback_volume": 70,
+        "output_device": "", "mute_recording": false, "vad": false
     })
 }
 #[derive(Clone)]
@@ -59,15 +64,23 @@ impl SettingsStore {
         let mut value = defaults().as_object().unwrap().clone();
         for (key, default) in &mut value {
             if let Some(saved) = stored.get(key) {
-                if saved.is_null()
-                    || std::mem::discriminant(saved) == std::mem::discriminant(default)
-                {
+                let valid = if key == "microphone" {
+                    saved.is_null() || saved.is_string()
+                } else {
+                    std::mem::discriminant(saved) == std::mem::discriminant(default)
+                };
+                if valid {
                     *default = saved.clone();
                 }
             }
         }
         if crate::models::find(value["model"].as_str().unwrap_or_default()).is_err() {
             value.insert("model".into(), json!("parakeet-tdt-0.6b-v3"));
+        }
+        if stored.get("shortcut_mode").is_none()
+            && stored.get("push_to_talk").and_then(Value::as_bool) == Some(true)
+        {
+            value.insert("shortcut_mode".into(), json!("hold"));
         }
         Self { value }
     }
@@ -94,6 +107,9 @@ impl SettingsStore {
             .and_then(Value::as_bool)
             .unwrap_or(false)
     }
+    pub fn usize(&self, key: &str) -> usize {
+        self.value.get(key).and_then(Value::as_u64).unwrap_or(0) as usize
+    }
     pub fn opt_str(&self, key: &str) -> Option<String> {
         let value = self.str(key);
         (!value.is_empty()).then_some(value)
@@ -102,6 +118,29 @@ impl SettingsStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn saved_microphone_and_new_preferences_survive_reload() {
+        let settings = SettingsStore::from_value(
+            json!({"microphone":"USB microphone","theme":"dark","unload_seconds":300,"history_limit":50,"audio_feedback":true,"feedback_volume":35}),
+        );
+        let reloaded = SettingsStore::from_value(
+            serde_json::from_slice(&serde_json::to_vec(&settings.value).unwrap()).unwrap(),
+        );
+        assert_eq!(reloaded.str("microphone"), "USB microphone");
+        assert_eq!(reloaded.str("theme"), "dark");
+        assert_eq!(reloaded.usize("unload_seconds"), 300);
+        assert_eq!(reloaded.usize("history_limit"), 50);
+        assert!(reloaded.bool("audio_feedback"));
+        assert_eq!(reloaded.usize("feedback_volume"), 35);
+    }
+    #[test]
+    fn malformed_nulls_do_not_erase_typed_defaults() {
+        let settings =
+            SettingsStore::from_value(json!({"history_limit":null,"theme":null,"microphone":null}));
+        assert_eq!(settings.usize("history_limit"), 20);
+        assert_eq!(settings.str("theme"), "system");
+        assert_eq!(settings.opt_str("microphone"), None);
+    }
     #[test]
     fn migrates_removed_models_and_discards_cloud_credentials() {
         let store = SettingsStore::from_value(

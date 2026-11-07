@@ -15,8 +15,8 @@ use view::{Action, ModelView, Screen, View};
 pub fn run() -> Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([820.0, 660.0])
-            .with_min_inner_size([720.0, 520.0]),
+            .with_inner_size([1000.0, 780.0])
+            .with_min_inner_size([760.0, 560.0]),
         renderer: eframe::Renderer::Glow,
         ..Default::default()
     };
@@ -33,6 +33,9 @@ struct Desktop {
     downloads: Arc<models::Downloads>,
     progress: Arc<Mutex<HashMap<String, f32>>>,
     microphones: Vec<String>,
+    outputs: Vec<String>,
+    cancel_hotkey: Option<HotKey>,
+    shortcut_down: Option<std::time::Instant>,
     hotkeys: Option<GlobalHotKeyManager>,
     hotkey: Option<HotKey>,
     view: View,
@@ -69,6 +72,9 @@ impl Desktop {
             downloads: Arc::default(),
             progress: Arc::default(),
             microphones: audio::input_devices(),
+            outputs: audio::output_devices(),
+            cancel_hotkey: None,
+            shortcut_down: None,
             hotkeys,
             hotkey: None,
             view: View {
@@ -83,6 +89,11 @@ impl Desktop {
             tray_events,
         };
         app.apply_hotkey();
+        #[cfg(any(target_os = "macos", windows))]
+        if app.tray.is_some() && app.controller.settings.lock().unwrap().bool("start_hidden") {
+            cc.egui_ctx
+                .send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        }
         Ok(app)
     }
     fn apply_hotkey(&mut self) {
@@ -138,7 +149,14 @@ impl Desktop {
     fn action(&mut self, action: Action, ctx: &egui::Context) {
         match action {
             Action::Save(settings) => match settings.save() {
-                Ok(()) => *self.controller.settings.lock().unwrap() = settings,
+                Ok(()) => {
+                    crate::transcript::retain(
+                        &mut self.controller.status.lock().unwrap().history,
+                        settings.usize("history_limit"),
+                    );
+                    *self.controller.settings.lock().unwrap() = settings;
+                    self.controller.send("config_changed");
+                }
                 Err(err) => self
                     .controller
                     .notice(format!("Could not save settings: {err}")),
@@ -151,7 +169,41 @@ impl Desktop {
             Action::Download(id) => self.download(id, ctx.clone()),
             Action::CancelDownload(id) => self.downloads.cancel(id),
             Action::Delete(id) => self.controller.send(&format!("delete:{id}")),
-            Action::RefreshMicrophones => self.microphones = audio::input_devices(),
+            Action::RefreshMicrophones => {
+                self.microphones = audio::input_devices();
+                self.outputs = audio::output_devices();
+            }
+            Action::CopyEntry(text) => {
+                if let Err(err) = inject::copy_to_clipboard(&text) {
+                    self.controller.notice(format!("Could not copy: {err}"));
+                }
+            }
+            Action::DeleteEntry(id) => {
+                let mut status = self.controller.status.lock().unwrap();
+                if status.history.first().is_some_and(|entry| entry.id == id) {
+                    status.transcript.clear();
+                }
+                status.history.retain(|entry| entry.id != id);
+            }
+            Action::ClearHistory => {
+                let mut status = self.controller.status.lock().unwrap();
+                status.history.clear();
+                status.transcript.clear();
+            }
+            Action::OpenData => {
+                let path = crate::settings::data_dir();
+                if let Err(err) = std::fs::create_dir_all(&path)
+                    .map_err(anyhow::Error::from)
+                    .and_then(|_| crate::system::open(&path.to_string_lossy()))
+                {
+                    self.controller.notice(err.to_string());
+                }
+            }
+            Action::OpenSource => {
+                if let Err(err) = crate::system::open("https://github.com/shivrajcode/Bolum") {
+                    self.controller.notice(err.to_string());
+                }
+            }
             Action::Copy => {
                 let text = self.controller.status.lock().unwrap().transcript.clone();
                 match inject::copy_to_clipboard(&text) {
@@ -191,22 +243,44 @@ impl Desktop {
         }
     }
 }
+fn shortcut_command(mode: &str, state: HotKeyState, held: bool) -> Option<&'static str> {
+    match state {
+        HotKeyState::Pressed => Some(if mode == "hold" { "start" } else { "toggle" }),
+        HotKeyState::Released if mode == "hold" || mode == "auto" && held => Some("stop"),
+        _ => None,
+    }
+}
 impl eframe::App for Desktop {
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.controller.shutdown();
+    }
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         while let Ok(event) = self.events.try_recv() {
+            if self.cancel_hotkey.is_some_and(|key| key.id() == event.id) {
+                if event.state == HotKeyState::Pressed {
+                    self.controller.send("cancel");
+                }
+                continue;
+            }
             if self.hotkey.is_none_or(|key| key.id() != event.id) {
                 continue;
             }
-            let hold = self
+            let mode = self
                 .controller
                 .settings
                 .lock()
                 .unwrap()
-                .bool("push_to_talk");
-            match event.state {
-                HotKeyState::Pressed => self.controller.send(if hold { "start" } else { "toggle" }),
-                HotKeyState::Released if hold => self.controller.send("stop"),
-                _ => {}
+                .str("shortcut_mode");
+            let held = if event.state == HotKeyState::Pressed {
+                self.shortcut_down = Some(std::time::Instant::now());
+                false
+            } else {
+                self.shortcut_down
+                    .take()
+                    .is_some_and(|time| time.elapsed() >= std::time::Duration::from_millis(300))
+            };
+            if let Some(command) = shortcut_command(&mode, event.state, held) {
+                self.controller.send(command);
             }
         }
         #[cfg(any(target_os = "macos", windows))]
@@ -223,6 +297,65 @@ impl eframe::App for Desktop {
             }
         }
         let status = self.controller.status.lock().unwrap().clone();
+        if let Some(manager) = &self.hotkeys {
+            if status.phase == "listening" && self.cancel_hotkey.is_none() {
+                let escape = HotKey::new(None, global_hotkey::hotkey::Code::Escape);
+                if manager.register(escape).is_ok() {
+                    self.cancel_hotkey = Some(escape);
+                }
+            } else if status.phase != "listening" {
+                if let Some(escape) = self.cancel_hotkey.take() {
+                    let _ = manager.unregister(escape);
+                }
+            }
+        }
+        if status.phase != "idle"
+            && self
+                .controller
+                .settings
+                .lock()
+                .unwrap()
+                .bool("show_overlay")
+        {
+            let controller = self.controller.clone();
+            let phase = status.phase;
+            let level = status.level;
+            let monitor = ctx
+                .input(|input| input.viewport().monitor_size)
+                .unwrap_or(egui::vec2(1440.0, 900.0));
+            ctx.show_viewport_deferred(
+                egui::ViewportId::from_hash_of("recording-overlay"),
+                egui::ViewportBuilder::default()
+                    .with_title("Bolum recording")
+                    .with_inner_size([290.0, 76.0])
+                    .with_decorations(false)
+                    .with_resizable(false)
+                    .with_taskbar(false)
+                    .with_active(false)
+                    .with_always_on_top()
+                    .with_position([monitor.x / 2.0 - 145.0, monitor.y - 120.0]),
+                move |ctx, _| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(if phase == "listening" {
+                                "Listening…"
+                            } else {
+                                "Transcribing…"
+                            });
+                            if phase == "listening" && ui.button("Finish").clicked() {
+                                controller.send("stop");
+                            }
+                        });
+                        if phase == "listening" {
+                            ui.add(
+                                egui::ProgressBar::new((level * 5.0).min(1.0))
+                                    .text("Esc to cancel"),
+                            );
+                        }
+                    });
+                },
+            );
+        }
         if self.last_transcript != status.transcript {
             self.view.copied = false;
             self.last_transcript = status.transcript.clone();
@@ -235,6 +368,7 @@ impl eframe::App for Desktop {
             settings: self.controller.settings.lock().unwrap().clone(),
             status,
             microphones: self.microphones.clone(),
+            outputs: self.outputs.clone(),
             models: models::CATALOG
                 .iter()
                 .map(|model| ModelView {

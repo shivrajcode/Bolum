@@ -23,6 +23,7 @@ reqwest = { version = "0.13", default-features = false, features = ["rustls", "s
 futures-util = "0.3"
 sha2 = "0.11"
 ort = { version = "=2.0.0-rc.14", default-features = false, features = ["std", "download-binaries", "tls-rustls", "api-24"] }
+egui-phosphor = "0.11.0"
 
 [target.'cfg(any(target_os = "macos", windows))'.dependencies]
 enigo = { version = "0.6", default-features = false }

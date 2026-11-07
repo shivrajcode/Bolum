@@ -6,6 +6,8 @@ pub mod ipc;
 pub mod models;
 mod pipeline;
 pub mod settings;
+mod system;
+mod transcript;
 mod ui;
 
 pub fn run() -> anyhow::Result<()> {

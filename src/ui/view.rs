@@ -1,46 +1,41 @@
-//! Presentation and user intents, separated from OS services for interaction tests.
+//! Handy-inspired settings, rendered entirely in Rust.
 use crate::{models, pipeline::Status, settings::SettingsStore};
-use eframe::egui::{self, Color32, RichText, Stroke, Vec2};
-
-const ACCENT: Color32 = Color32::from_rgb(105, 75, 167);
-const LAVENDER: Color32 = Color32::from_rgb(232, 222, 249);
-const INK: Color32 = Color32::from_rgb(42, 38, 51);
-const SECONDARY: Color32 = Color32::from_rgb(107, 101, 117);
-const BACKGROUND: Color32 = Color32::from_rgb(249, 248, 251);
+use eframe::egui::{self, Color32, FontId, RichText, Stroke, Vec2};
+use egui_phosphor::regular as icon;
 
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub enum Page {
     #[default]
     General,
+    History,
     Models,
-    Audio,
-    Transcript,
+    Advanced,
     About,
 }
 impl Page {
     pub const ALL: [Self; 5] = [
         Self::General,
+        Self::History,
         Self::Models,
-        Self::Audio,
-        Self::Transcript,
+        Self::Advanced,
         Self::About,
     ];
     pub fn label(self) -> &'static str {
         match self {
             Self::General => "General",
-            Self::Models => "Speech models",
-            Self::Audio => "Audio input",
-            Self::Transcript => "Last dictation",
-            Self::About => "About & permissions",
+            Self::History => "History",
+            Self::Models => "Models",
+            Self::Advanced => "Advanced",
+            Self::About => "About",
         }
     }
-    fn subtitle(self) -> &'static str {
+    fn icon(self) -> &'static str {
         match self {
-            Self::General => "A little less typing. A little more flow.",
-            Self::Models => "Choose the voice model that feels right for you.",
-            Self::Audio => "Make sure your voice comes through clearly.",
-            Self::Transcript => "Your most recent words, kept only for this session.",
-            Self::About => "A quiet place for your voice. Entirely on your device.",
+            Self::General => icon::HAND_WAVING,
+            Self::History => icon::CLOCK_COUNTER_CLOCKWISE,
+            Self::Models => icon::CPU,
+            Self::Advanced => icon::GEAR,
+            Self::About => icon::INFO,
         }
     }
 }
@@ -54,6 +49,7 @@ pub struct Screen {
     pub settings: SettingsStore,
     pub status: Status,
     pub microphones: Vec<String>,
+    pub outputs: Vec<String>,
     pub models: Vec<ModelView>,
     pub tray_available: bool,
 }
@@ -66,10 +62,15 @@ pub enum Action {
     Delete(&'static str),
     RefreshMicrophones,
     Copy,
+    CopyEntry(String),
+    DeleteEntry(u64),
+    ClearHistory,
     ClearTranscript,
     Dismiss,
     Hide,
     Quit,
+    OpenData,
+    OpenSource,
     #[cfg(target_os = "macos")]
     Permissions(&'static str),
 }
@@ -78,192 +79,504 @@ pub struct View {
     pub page: Page,
     pub hotkey_text: String,
     pub shortcut_error: String,
-    pub(super) pending_delete: Option<&'static str>,
     pub copied: bool,
+    pub(super) pending_delete: Option<&'static str>,
+    pub capturing: bool,
+    pub search: String,
+    pub language_filter: String,
+    pub(super) theme_applied: Option<bool>,
 }
-
-pub fn configure(ctx: &egui::Context, system_font: bool) {
-    ctx.set_theme(egui::Theme::Light);
-    let mut style = egui::Style {
-        visuals: egui::Visuals::light(),
-        ..Default::default()
-    };
-    style.visuals.override_text_color = Some(INK);
-    style.visuals.panel_fill = BACKGROUND;
-    style.visuals.window_fill = Color32::WHITE;
-    style.visuals.faint_bg_color = Color32::from_rgb(244, 240, 249);
-    style.visuals.extreme_bg_color = Color32::from_rgb(251, 250, 253);
-    style.visuals.selection.bg_fill = LAVENDER;
-    style.visuals.selection.stroke = Stroke::new(1.0_f32, ACCENT);
-    style.visuals.widgets.inactive.weak_bg_fill = Color32::from_rgb(241, 237, 247);
-    style.visuals.widgets.inactive.bg_fill = Color32::from_rgb(241, 237, 247);
-    style.visuals.widgets.inactive.bg_stroke =
-        Stroke::new(1.0_f32, Color32::from_rgb(225, 220, 233));
-    style.visuals.widgets.hovered.weak_bg_fill = LAVENDER;
-    style.visuals.widgets.hovered.bg_fill = LAVENDER;
-    style.visuals.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, ACCENT.gamma_multiply(0.5));
-    style.visuals.widgets.active.bg_fill = LAVENDER;
-    style.visuals.widgets.active.weak_bg_fill = LAVENDER;
-    style.visuals.widgets.active.bg_stroke = Stroke::new(1.0_f32, ACCENT);
-    for widget in [
-        &mut style.visuals.widgets.inactive,
-        &mut style.visuals.widgets.hovered,
-        &mut style.visuals.widgets.active,
-    ] {
-        widget.corner_radius = egui::CornerRadius::same(6);
-    }
-    style.spacing.item_spacing = Vec2::new(10.0, 8.0);
-    style.spacing.button_padding = Vec2::new(12.0, 7.0);
-    style.spacing.interact_size.y = 30.0;
-    style
-        .text_styles
-        .insert(egui::TextStyle::Body, egui::FontId::proportional(14.0));
-    style
-        .text_styles
-        .insert(egui::TextStyle::Button, egui::FontId::proportional(13.0));
-    style
-        .text_styles
-        .insert(egui::TextStyle::Small, egui::FontId::proportional(12.0));
-    style
-        .text_styles
-        .insert(egui::TextStyle::Heading, egui::FontId::proportional(25.0));
-    ctx.set_style(style);
-    if system_font && cfg!(target_os = "macos") {
-        if let Ok(bytes) = std::fs::read("/System/Library/Fonts/SFNS.ttf") {
-            let mut fonts = egui::FontDefinitions::default();
-            fonts.font_data.insert(
-                "San Francisco".into(),
-                egui::FontData::from_owned(bytes).into(),
-            );
-            fonts
-                .families
-                .get_mut(&egui::FontFamily::Proportional)
-                .unwrap()
-                .insert(0, "San Francisco".into());
-            ctx.set_fonts(fonts);
+#[derive(Clone, Copy)]
+struct Palette {
+    bg: Color32,
+    sidebar: Color32,
+    card: Color32,
+    input: Color32,
+    border: Color32,
+    ink: Color32,
+    muted: Color32,
+    accent: Color32,
+    selected: Color32,
+}
+impl Palette {
+    fn new(dark: bool) -> Self {
+        let rgb = Color32::from_rgb;
+        if dark {
+            Self {
+                bg: rgb(40, 39, 42),
+                sidebar: rgb(37, 36, 39),
+                card: rgb(42, 41, 44),
+                input: rgb(51, 49, 54),
+                border: rgb(63, 61, 67),
+                ink: rgb(242, 240, 246),
+                muted: rgb(163, 158, 173),
+                accent: rgb(192, 157, 241),
+                selected: rgb(124, 91, 163),
+            }
+        } else {
+            Self {
+                bg: rgb(249, 248, 251),
+                sidebar: rgb(241, 238, 247),
+                card: Color32::WHITE,
+                input: rgb(247, 244, 251),
+                border: rgb(224, 218, 233),
+                ink: rgb(45, 40, 54),
+                muted: rgb(112, 104, 126),
+                accent: rgb(113, 75, 166),
+                selected: rgb(142, 107, 186),
+            }
         }
     }
 }
-fn muted(ui: &mut egui::Ui, text: impl Into<String>) {
-    ui.label(RichText::new(text).color(SECONDARY).size(12.0));
+pub fn configure(ctx: &egui::Context, system_font: bool) {
+    let mut fonts = egui::FontDefinitions::default();
+    if system_font && cfg!(target_os = "macos") {
+        for (name, path) in [
+            ("system", "/System/Library/Fonts/SFNS.ttf"),
+            ("brand", "/System/Library/Fonts/SFNSRounded.ttf"),
+        ] {
+            if let Ok(bytes) = std::fs::read(path) {
+                fonts
+                    .font_data
+                    .insert(name.into(), egui::FontData::from_owned(bytes).into());
+                if name == "system" {
+                    fonts
+                        .families
+                        .get_mut(&egui::FontFamily::Proportional)
+                        .unwrap()
+                        .insert(0, name.into());
+                } else {
+                    fonts
+                        .families
+                        .insert(egui::FontFamily::Name("brand".into()), vec![name.into()]);
+                }
+            }
+        }
+    }
+    if !fonts
+        .families
+        .contains_key(&egui::FontFamily::Name("brand".into()))
+    {
+        fonts.families.insert(
+            egui::FontFamily::Name("brand".into()),
+            fonts.families[&egui::FontFamily::Proportional].clone(),
+        );
+    }
+    egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
+    ctx.set_fonts(fonts);
 }
-fn group(ui: &mut egui::Ui, contents: impl FnOnce(&mut egui::Ui)) {
+fn apply_theme(ctx: &egui::Context, dark: bool) {
+    let p = Palette::new(dark);
+    let mut visuals = if dark {
+        egui::Visuals::dark()
+    } else {
+        egui::Visuals::light()
+    };
+    visuals.override_text_color = Some(p.ink);
+    visuals.panel_fill = p.bg;
+    visuals.window_fill = p.card;
+    visuals.extreme_bg_color = p.input;
+    visuals.faint_bg_color = p.input;
+    visuals.selection.bg_fill = p.selected;
+    visuals.selection.stroke = Stroke::new(1.0_f32, Color32::WHITE);
+    for widget in [
+        &mut visuals.widgets.inactive,
+        &mut visuals.widgets.hovered,
+        &mut visuals.widgets.active,
+    ] {
+        widget.corner_radius = egui::CornerRadius::same(6);
+        widget.bg_fill = p.input;
+        widget.weak_bg_fill = p.input;
+        widget.bg_stroke = Stroke::new(1.0_f32, p.border);
+        widget.fg_stroke = Stroke::new(1.0_f32, p.ink);
+    }
+    visuals.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, p.accent);
+    visuals.widgets.active.bg_stroke = Stroke::new(1.5_f32, p.accent);
+    let mut style = egui::Style {
+        visuals,
+        ..Default::default()
+    };
+    style.spacing.item_spacing = Vec2::new(10.0, 10.0);
+    style.spacing.button_padding = Vec2::new(12.0, 7.0);
+    style.spacing.interact_size.y = 32.0;
+    for (kind, size) in [
+        (egui::TextStyle::Body, 15.0),
+        (egui::TextStyle::Button, 14.0),
+        (egui::TextStyle::Small, 12.0),
+        (egui::TextStyle::Heading, 25.0),
+    ] {
+        style.text_styles.insert(kind, FontId::proportional(size));
+    }
+    ctx.set_style(style);
+}
+fn muted(ui: &mut egui::Ui, p: Palette, text: impl Into<String>) {
+    ui.label(RichText::new(text).color(p.muted).size(13.0));
+}
+fn section(ui: &mut egui::Ui, p: Palette, title: &str) {
+    ui.add_space(12.0);
+    ui.label(
+        RichText::new(title.to_uppercase())
+            .color(p.muted)
+            .size(12.0)
+            .strong(),
+    );
+}
+fn group(ui: &mut egui::Ui, p: Palette, contents: impl FnOnce(&mut egui::Ui)) {
     egui::Frame::new()
-        .fill(Color32::WHITE)
+        .fill(p.card)
+        .stroke(Stroke::new(1.0_f32, p.border))
         .corner_radius(10)
-        .stroke(Stroke::new(1.0_f32, Color32::from_rgb(232, 228, 238)))
-        .inner_margin(14)
+        .inner_margin(egui::Margin::symmetric(18, 4))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             contents(ui);
         });
 }
-fn primary(ui: &mut egui::Ui, text: &str) -> egui::Response {
-    ui.add(
-        egui::Button::new(RichText::new(text).color(Color32::WHITE))
-            .fill(ACCENT)
-            .corner_radius(7),
-    )
+fn divider(ui: &mut egui::Ui, p: Palette) {
+    let (rect, _) =
+        ui.allocate_exact_size(Vec2::new(ui.available_width(), 1.0), egui::Sense::hover());
+    ui.painter().hline(
+        rect.x_range(),
+        rect.center().y,
+        Stroke::new(1.0_f32, p.border),
+    );
 }
-fn section(ui: &mut egui::Ui, title: &str) {
-    ui.add_space(6.0);
-    ui.label(RichText::new(title).strong().size(13.0));
+fn row(
+    ui: &mut egui::Ui,
+    p: Palette,
+    label: &str,
+    help: &str,
+    controls: impl FnOnce(&mut egui::Ui),
+) {
+    let width = ui.available_width();
+    ui.allocate_ui_with_layout(
+        Vec2::new(width, 40.0),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            ui.allocate_ui_with_layout(
+                Vec2::new((width * 0.43).clamp(150.0, 270.0), 38.0),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    ui.label(label);
+                    if !help.is_empty() {
+                        ui.label(RichText::new(icon::INFO).color(p.muted).size(15.0))
+                            .on_hover_text(help);
+                    }
+                },
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), controls);
+        },
+    );
 }
-fn choice(ui: &mut egui::Ui, label: &str, value: &mut String, options: &[(&str, &str)]) -> bool {
+fn combo(ui: &mut egui::Ui, label: &str, value: &mut String, options: &[(&str, &str)]) -> bool {
     let selected = options
         .iter()
         .find(|(id, _)| *id == value)
         .map_or(value.as_str(), |(_, text)| text)
         .to_owned();
     let mut changed = false;
-    ui.horizontal(|ui| {
-        let label_response = ui.label(label);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            egui::ComboBox::from_id_salt(label)
-                .selected_text(selected)
-                .width(170.0)
-                .show_ui(ui, |ui| {
-                    for (id, text) in options {
-                        changed |= ui.selectable_value(value, (*id).into(), *text).changed();
-                    }
-                })
-                .response
-                .labelled_by(label_response.id);
-        });
+    let response = egui::ComboBox::from_id_salt(label)
+        .selected_text(selected)
+        .width(ui.available_width().min(240.0))
+        .show_ui(ui, |ui| {
+            for (id, text) in options {
+                changed |= ui.selectable_value(value, (*id).into(), *text).changed();
+            }
+        })
+        .response;
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, ui.is_enabled(), label)
     });
     changed
 }
-fn set_bool(ui: &mut egui::Ui, settings: &mut SettingsStore, key: &str, label: &str) -> bool {
-    let mut value = settings.bool(key);
-    let changed = ui.checkbox(&mut value, label).changed();
+fn choice(
+    ui: &mut egui::Ui,
+    p: Palette,
+    settings: &mut SettingsStore,
+    label: &str,
+    key: &str,
+    help: &str,
+    options: &[(&str, &str)],
+) -> bool {
+    let mut changed = false;
+    let mut value = settings.str(key);
+    row(ui, p, label, help, |ui| {
+        changed = combo(ui, label, &mut value, options)
+    });
     if changed {
         settings.set_quiet(key, value.into());
     }
     changed
 }
+fn toggle(ui: &mut egui::Ui, value: &mut bool, label: &str, p: Palette) -> bool {
+    let (rect, mut response) = ui.allocate_exact_size(Vec2::new(42.0, 25.0), egui::Sense::click());
+    if response.clicked() {
+        *value = !*value;
+        response.mark_changed();
+    }
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), *value, label)
+    });
+    let t = ui.ctx().animate_bool_with_time(response.id, *value, 0.12);
+    ui.painter()
+        .rect_filled(rect, 13, if *value { p.selected } else { p.border });
+    ui.painter().circle_filled(
+        egui::pos2(
+            egui::lerp(rect.left() + 12.5..=rect.right() - 12.5, t),
+            rect.center().y,
+        ),
+        10.0,
+        Color32::WHITE,
+    );
+    if response.has_focus() {
+        ui.painter().rect_stroke(
+            rect.expand(3.0),
+            15,
+            Stroke::new(1.0_f32, p.accent),
+            egui::StrokeKind::Outside,
+        );
+    }
+    response.changed()
+}
+fn bool_row(
+    ui: &mut egui::Ui,
+    p: Palette,
+    settings: &mut SettingsStore,
+    label: &str,
+    key: &str,
+    help: &str,
+) -> bool {
+    let mut value = settings.bool(key);
+    let mut changed = false;
+    row(ui, p, label, help, |ui| {
+        changed = toggle(ui, &mut value, label, p)
+    });
+    if changed {
+        settings.set_quiet(key, value.into());
+    }
+    changed
+}
+fn accent_button(ui: &mut egui::Ui, text: &str, p: Palette) -> egui::Response {
+    ui.add(
+        egui::Button::new(RichText::new(text).color(Color32::WHITE))
+            .fill(p.selected)
+            .corner_radius(7),
+    )
+}
+fn icon_button(ui: &mut egui::Ui, glyph: &str, name: &str) -> egui::Response {
+    let response = ui.add(egui::Button::new(RichText::new(glyph).size(19.0)).frame(false));
+    response
+        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), name));
+    response.on_hover_text(name)
+}
 impl View {
     pub fn show(&mut self, ctx: &egui::Context, screen: &mut Screen) -> Vec<Action> {
+        let preference = screen.settings.str("theme");
+        let dark = match preference.as_str() {
+            "light" => false,
+            "dark" => true,
+            _ => ctx.system_theme().unwrap_or(egui::Theme::Dark) == egui::Theme::Dark,
+        };
+        if self.theme_applied != Some(dark) {
+            apply_theme(ctx, dark);
+            self.theme_applied = Some(dark);
+        }
+        let p = Palette::new(dark);
         let mut actions = Vec::new();
         let mut changed = false;
         let idle = screen.status.phase == "idle";
-        ctx.input_mut(|input| {
-            if input.consume_key(egui::Modifiers::COMMAND, egui::Key::Q) {
-                actions.push(Action::Quit);
+        if self.capturing {
+            let events = ctx.input(|input| input.events.clone());
+            for event in events {
+                if let egui::Event::Key {
+                    key,
+                    pressed: true,
+                    modifiers,
+                    ..
+                } = event
+                {
+                    if key == egui::Key::Escape {
+                        self.capturing = false;
+                        break;
+                    }
+                    let mut keys = Vec::new();
+                    if modifiers.ctrl {
+                        keys.push("ctrl".to_owned());
+                    }
+                    if modifiers.alt {
+                        keys.push("alt".to_owned());
+                    }
+                    if modifiers.shift {
+                        keys.push("shift".to_owned());
+                    }
+                    if modifiers.mac_cmd || (modifiers.command && !modifiers.ctrl) {
+                        keys.push("super".to_owned());
+                    }
+                    if keys.is_empty() {
+                        self.shortcut_error = "Include Control, Option, Shift or Command.".into();
+                        continue;
+                    }
+                    keys.push(format!("{key:?}"));
+                    let accelerator = keys.join("+");
+                    if accelerator.parse::<global_hotkey::hotkey::HotKey>().is_ok() {
+                        self.hotkey_text = accelerator.clone();
+                        self.shortcut_error.clear();
+                        self.capturing = false;
+                        actions.push(Action::ApplyShortcut(accelerator));
+                    } else {
+                        self.shortcut_error =
+                            "That key is not supported. Try a letter or Space.".into();
+                    }
+                    break;
+                }
             }
-            if input.consume_key(egui::Modifiers::COMMAND, egui::Key::W) {
-                actions.push(if screen.tray_available {
-                    Action::Hide
-                } else {
-                    Action::Quit
+        } else {
+            ctx.input_mut(|input| {
+                if input.consume_key(egui::Modifiers::COMMAND, egui::Key::Q) {
+                    actions.push(Action::Quit);
+                }
+                if input.consume_key(egui::Modifiers::COMMAND, egui::Key::W) {
+                    actions.push(if screen.tray_available {
+                        Action::Hide
+                    } else {
+                        Action::Quit
+                    });
+                }
+                if input.consume_key(egui::Modifiers::COMMAND, egui::Key::Comma) {
+                    self.page = Page::General;
+                }
+                if screen.status.phase == "listening"
+                    && input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)
+                {
+                    actions.push(Action::Command("cancel"));
+                }
+            });
+        }
+        egui::TopBottomPanel::bottom("model-footer")
+            .exact_height(38.0)
+            .frame(
+                egui::Frame::new()
+                    .fill(p.sidebar)
+                    .stroke(Stroke::new(1.0_f32, p.border))
+                    .inner_margin(egui::Margin::symmetric(14, 3)),
+            )
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(if idle { icon::CIRCLE } else { icon::WAVEFORM })
+                            .color(p.accent),
+                    );
+                    let selected = screen.settings.str("model");
+                    let label = models::find(&selected)
+                        .map(|m| m.name.trim_start_matches("NVIDIA "))
+                        .unwrap_or("Choose a model");
+                    if ui
+                        .add(
+                            egui::Button::new(format!("{label}  {}", icon::CARET_DOWN))
+                                .frame(false),
+                        )
+                        .clicked()
+                    {
+                        self.page = Page::Models;
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        muted(ui, p, format!("v{}", env!("CARGO_PKG_VERSION")));
+                        muted(
+                            ui,
+                            p,
+                            if idle {
+                                "Processed on this device"
+                            } else {
+                                screen.status.phase
+                            },
+                        );
+                    });
                 });
-            }
-            if input.consume_key(egui::Modifiers::COMMAND, egui::Key::Comma) {
-                self.page = Page::General;
-            }
-            if screen.status.phase == "listening"
-                && input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)
-            {
-                actions.push(Action::Command("cancel"));
-            }
-        });
+            });
         egui::SidePanel::left("navigation")
-            .exact_width(184.0)
+            .exact_width(190.0)
             .resizable(false)
             .frame(
                 egui::Frame::new()
-                    .fill(Color32::from_rgb(241, 237, 248))
-                    .inner_margin(16),
+                    .fill(p.sidebar)
+                    .stroke(Stroke::new(1.0_f32, p.border))
+                    .inner_margin(12),
             )
             .show(ctx, |ui| {
                 ui.add_space(18.0);
-                ui.label(RichText::new("bolum").size(27.0).strong().color(ACCENT));
-                muted(ui, "A moment. In your words.");
-                ui.add_space(30.0);
+                ui.horizontal(|ui| {
+                    ui.add_space(10.0);
+                    ui.label(
+                        RichText::new("bolum")
+                            .font(FontId::new(
+                                37.0,
+                                if ctx.fonts(|fonts| {
+                                    fonts
+                                        .families()
+                                        .contains(&egui::FontFamily::Name("brand".into()))
+                                }) {
+                                    egui::FontFamily::Name("brand".into())
+                                } else {
+                                    egui::FontFamily::Proportional
+                                },
+                            ))
+                            .strong()
+                            .color(p.accent),
+                    );
+                });
+                ui.add_space(16.0);
+                divider(ui, p);
+                ui.add_space(7.0);
                 for page in Page::ALL {
                     let selected = self.page == page;
-                    let response = ui.add_sized(
-                        [ui.available_width(), 36.0],
-                        egui::Button::new(RichText::new(page.label()).color(if selected {
-                            ACCENT
-                        } else {
-                            SECONDARY
-                        }))
-                        .selected(selected)
-                        .frame(selected)
-                        .corner_radius(7),
+                    let (rect, response) = ui.allocate_exact_size(
+                        Vec2::new(ui.available_width(), 44.0),
+                        egui::Sense::click(),
                     );
+                    response.widget_info(|| {
+                        egui::WidgetInfo::selected(
+                            egui::WidgetType::Button,
+                            true,
+                            selected,
+                            page.label(),
+                        )
+                    });
+                    if selected || response.hovered() {
+                        ui.painter().rect_filled(
+                            rect,
+                            8,
+                            if selected { p.selected } else { p.input },
+                        );
+                    }
+                    let color = if selected { Color32::WHITE } else { p.ink };
+                    ui.painter().text(
+                        egui::pos2(rect.left() + 12.0, rect.center().y),
+                        egui::Align2::LEFT_CENTER,
+                        page.icon(),
+                        FontId::proportional(24.0),
+                        color,
+                    );
+                    ui.painter().text(
+                        egui::pos2(rect.left() + 48.0, rect.center().y),
+                        egui::Align2::LEFT_CENTER,
+                        page.label(),
+                        FontId::proportional(16.0),
+                        color,
+                    );
+                    if response.has_focus() {
+                        ui.painter().rect_stroke(
+                            rect.expand(1.0),
+                            8,
+                            Stroke::new(1.0_f32, p.accent),
+                            egui::StrokeKind::Outside,
+                        );
+                    }
                     if response.clicked() {
                         self.page = page;
+                        self.capturing = false;
                     }
                 }
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
-                    muted(ui, format!("Version {}", env!("CARGO_PKG_VERSION")));
-                    ui.label(
-                        RichText::new("On-device dictation")
-                            .size(12.0)
-                            .color(ACCENT),
-                    );
-                    ui.add_space(8.0);
                     if ui.small_button("Quit Bolum").clicked() {
                         actions.push(Action::Quit);
                     }
@@ -280,43 +593,72 @@ impl View {
                     }
                 });
             });
-        egui::CentralPanel::default().frame(egui::Frame::new().fill(BACKGROUND).inner_margin(28)).show(ctx, |ui| {
-            let heading = ui.heading(self.page.label());
-            ctx.accesskit_node_builder(heading.id, |node| { node.set_role(egui::accesskit::Role::Heading); node.set_level(1); });
-            muted(ui, self.page.subtitle());
-            ui.add_space(14.0);
-            if !screen.status.notice.is_empty() {
-                egui::Frame::new().fill(Color32::from_rgb(255, 244, 229)).inner_margin(12).corner_radius(8).show(ui, |ui| {
-                    ui.label(RichText::new(&screen.status.notice).color(Color32::from_rgb(126, 77, 26)));
-                    if ui.small_button("Dismiss message").clicked() { actions.push(Action::Dismiss); }
-                });
-                ui.add_space(8.0);
-            }
-            // Capture controls stay available on every page, even while settings are locked.
-            if !idle {
-                group(ui, |ui| {
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label(RichText::new(if screen.status.phase == "listening" { "Listening to you…" } else { "Turning speech into text…" }).strong().color(ACCENT));
-                        if screen.status.phase == "listening" {
-                            if primary(ui, "Finish recording").clicked() { actions.push(Action::Command("stop")); }
-                            if ui.button("Cancel recording").clicked() { actions.push(Action::Command("cancel")); }
+        egui::CentralPanel::default()
+            .frame(egui::Frame::new().fill(p.bg).inner_margin(28))
+            .show(ctx, |ui| {
+                if !screen.status.notice.is_empty() {
+                    group(ui, p, |ui| {
+                        ui.label(&screen.status.notice);
+                        if ui.small_button("Dismiss message").clicked() {
+                            actions.push(Action::Dismiss);
                         }
                     });
-                    if screen.status.phase == "listening" { ui.add(egui::ProgressBar::new((screen.status.level * 5.0).min(1.0)).fill(ACCENT).text("Input level")); }
-                    else { muted(ui, "You can keep using other apps. Your transcript will appear shortly."); }
-                });
-                ui.add_space(10.0);
-            }
-            egui::ScrollArea::vertical().id_salt(self.page.label()).auto_shrink([false, false]).show(ui, |ui| {
-                match self.page {
-                    Page::General => changed |= self.general(ui, screen, &mut actions),
-                    Page::Models => changed |= self.models(ui, screen, &mut actions),
-                    Page::Audio => changed |= self.audio(ui, screen, &mut actions),
-                    Page::Transcript => self.transcript(ui, screen, &mut actions),
-                    Page::About => self.about(ui, &mut actions),
+                    ui.add_space(8.0);
                 }
+                if !idle {
+                    group(ui, p, |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(
+                                RichText::new(if screen.status.phase == "listening" {
+                                    "Listening to you…"
+                                } else {
+                                    "Transcribing…"
+                                })
+                                .color(p.accent),
+                            );
+                            if screen.status.phase == "listening" {
+                                if accent_button(ui, "Finish recording", p).clicked() {
+                                    actions.push(Action::Command("stop"));
+                                }
+                                if ui.button("Cancel recording").clicked() {
+                                    actions.push(Action::Command("cancel"));
+                                }
+                            }
+                        });
+                        if screen.status.phase == "listening" {
+                            ui.add(
+                                egui::ProgressBar::new((screen.status.level * 5.0).min(1.0))
+                                    .fill(p.selected)
+                                    .text("Input level"),
+                            );
+                        }
+                    });
+                    ui.add_space(8.0);
+                }
+                egui::ScrollArea::vertical()
+                    .id_salt(self.page.label())
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        let heading = ui.heading(match self.page {
+                            Page::Models => "Transcription models",
+                            Page::History => "Dictation history",
+                            _ => self.page.label(),
+                        });
+                        ctx.accesskit_node_builder(heading.id, |node| {
+                            node.set_role(egui::accesskit::Role::Heading);
+                            node.set_level(1);
+                        });
+                        ui.add_space(10.0);
+                        match self.page {
+                            Page::General => changed |= self.general(ui, p, screen, &mut actions),
+                            Page::Models => changed |= self.models(ui, p, screen, &mut actions),
+                            Page::Advanced => changed |= self.advanced(ui, p, screen),
+                            Page::History => self.history(ui, p, screen, &mut actions),
+                            Page::About => changed |= self.about(ui, p, screen, &mut actions),
+                        }
+                        ui.add_space(10.0);
+                    });
             });
-        });
         if changed {
             actions.insert(0, Action::Save(screen.settings.clone()));
         }
@@ -325,339 +667,420 @@ impl View {
     fn general(
         &mut self,
         ui: &mut egui::Ui,
+        p: Palette,
         screen: &mut Screen,
         actions: &mut Vec<Action>,
     ) -> bool {
         let mut changed = false;
-        let selected = screen.settings.str("model");
+        let idle = screen.status.phase == "idle";
         let ready = screen
             .models
             .iter()
-            .any(|model| model.id == selected && model.downloaded);
-        group(ui, |ui| {
-            ui.label(
-                RichText::new(if ready {
-                    "Your voice, ready to go."
-                } else {
-                    "Let’s set up your voice."
-                })
-                .size(20.0)
-                .strong(),
-            );
-            if ready {
-                muted(
-                    ui,
-                    "Click into any text field, then use your shortcut to start dictating.",
-                );
-                ui.add_space(8.0);
-                ui.label(
-                    RichText::new(shortcut_label(&screen.settings.str("hotkey")))
-                        .size(20.0)
-                        .color(ACCENT),
-                );
-                if let Ok(model) = models::find(&selected) {
-                    muted(ui, model.name);
-                }
-            } else {
-                muted(
-                    ui,
-                    "Download a speech model once. After that, your words stay on this device.",
-                );
-                if primary(ui, "Choose a speech model").clicked() {
+            .any(|m| m.id == screen.settings.str("model") && m.downloaded);
+        if !ready {
+            group(ui, p, |ui| {
+                ui.label("Download a speech model to start dictating.");
+                if accent_button(ui, "Choose a speech model", p).clicked() {
                     self.page = Page::Models;
                 }
-            }
-        });
-        section(ui, "Dictation");
-        ui.add_enabled_ui(screen.status.phase == "idle", |ui| {
-            group(ui, |ui| {
-                ui.label("Keyboard shortcut");
-                ui.horizontal(|ui| {
-                    let edit = ui.add(egui::TextEdit::singleline(&mut self.hotkey_text).desired_width(230.0).hint_text("ctrl+alt+space"));
-                    edit.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, "Keyboard shortcut"));
-                    if ui.button("Apply shortcut").clicked() {
-                        match self.hotkey_text.parse::<global_hotkey::hotkey::HotKey>() {
-                            Ok(_) => { self.shortcut_error.clear(); actions.push(Action::ApplyShortcut(self.hotkey_text.clone())); }
-                            Err(_) => self.shortcut_error = "Use a shortcut such as ctrl+alt+space or super+shift+d.".into(),
-                        }
-                    }
+            });
+        }
+        ui.add_enabled_ui(idle,|ui| {
+            section(ui,p,"General");
+            group(ui,p,|ui| {
+                row(ui,p,"Transcribe shortcut","Click the shortcut and press the keys you want to use.",|ui| {
+                    if icon_button(ui,icon::ARROW_COUNTER_CLOCKWISE,"Reset shortcut").clicked(){self.hotkey_text="ctrl+alt+space".into();actions.push(Action::ApplyShortcut(self.hotkey_text.clone()));}
+                    let response=ui.add_sized([ui.available_width().min(290.0),34.0],egui::Button::new(if self.capturing {"Press a shortcut…".into()} else {shortcut_label(&self.hotkey_text)}));
+                    response.widget_info(||egui::WidgetInfo::labeled(egui::WidgetType::Button,true,"Change shortcut"));
+                    if response.clicked(){self.capturing=true;self.shortcut_error.clear();}
                 });
-                if !self.shortcut_error.is_empty() { ui.colored_label(Color32::from_rgb(155, 64, 59), &self.shortcut_error); }
-                muted(ui, "Use ctrl, alt, shift or super, joined with + and a key.");
-                ui.separator();
-                changed |= set_bool(ui, &mut screen.settings, "push_to_talk", "Hold shortcut to talk");
-                muted(ui, if screen.settings.bool("push_to_talk") { "Release the shortcut to transcribe." } else { "Press once to start. Press again to finish." });
+                if !self.shortcut_error.is_empty(){muted(ui,p,&self.shortcut_error);}
+                divider(ui,p);
+                changed|=choice(ui,p,&mut screen.settings,"Shortcut behavior","shortcut_mode","Auto: tap to toggle, hold for more than 300 ms to use push-to-talk.",&[("auto","Auto"),("toggle","Press to toggle"),("hold","Hold to talk")]);
+                divider(ui,p);
+                row(ui,p,"Cancel shortcut","Escape cancels an active recording.",|ui|{ui.label(RichText::new("Escape").monospace());});
             });
-            section(ui, "Text insertion");
-            group(ui, |ui| {
-                let mut mode = screen.settings.str("injection");
-                if choice(ui, "Delivery", &mut mode, &[("clipboard", "Paste into active app"), ("type", "Type into active app"), ("none", "Show in Bolum only")]) {
-                    screen.settings.set_quiet("injection", mode.clone().into()); changed = true;
-                }
-                muted(ui, match mode.as_str() { "clipboard" => "Pasting replaces your clipboard. Accessibility permission is required on macOS.", "type" => "Text is typed directly into the focused field.", _ => "Your words appear in Last dictation. Nothing is inserted into other apps." });
-                ui.separator();
-                changed |= set_bool(ui, &mut screen.settings, "append_trailing_space", "Add a space after each dictation");
+            if screen.settings.str("model")=="canary-180m-flash" {
+                section(ui,p,"Canary 180M Flash settings");
+                group(ui,p,|ui| {
+                    changed|=choice(ui,p,&mut screen.settings,"Language","language","Choose the language you speak.",&[("en","English"),("de","German"),("es","Spanish"),("fr","French")]);
+                    divider(ui,p);changed|=bool_row(ui,p,&mut screen.settings,"Translate to English","translate_english","Translate German, French or Spanish speech into English with Canary.");
+                });
+            }
+            section(ui,p,"Sound");
+            group(ui,p,|ui| {
+                let mut options=vec![("","Default")];options.extend(screen.microphones.iter().map(|s|(s.as_str(),s.as_str())));
+                changed|=choice(ui,p,&mut screen.settings,"Microphone","microphone","The input device used for dictation.",&options);
+                if ui.small_button("Refresh devices").clicked(){actions.push(Action::RefreshMicrophones);}
+                if screen.microphones.is_empty(){muted(ui,p,"No microphones found. Connect one and allow microphone access.");}
+                divider(ui,p);
+                #[cfg(target_os="macos")]
+                {changed|=bool_row(ui,p,&mut screen.settings,"Mute while recording","mute_recording","Temporarily mute macOS output and restore its previous state when recording stops.");divider(ui,p);}
+                changed|=bool_row(ui,p,&mut screen.settings,"Audio feedback","audio_feedback","Play a short local tone when recording starts and finishes.");
+                divider(ui,p);
+                ui.add_enabled_ui(screen.settings.bool("audio_feedback"),|ui| {
+                    let mut options=vec![("","Default")];options.extend(screen.outputs.iter().map(|s|(s.as_str(),s.as_str())));
+                    changed|=choice(ui,p,&mut screen.settings,"Output device","output_device","The device used for feedback tones.",&options);
+                    divider(ui,p);
+                    let mut volume=screen.settings.usize("feedback_volume").min(100) as u32;
+                    row(ui,p,"Volume","Feedback tone volume.",|ui|{let r=ui.add(egui::Slider::new(&mut volume,0..=100).suffix("%"));r.widget_info(||egui::WidgetInfo::labeled(egui::WidgetType::Slider,ui.is_enabled(),"Feedback volume"));changed|=r.changed();});
+                    screen.settings.set_quiet("feedback_volume",volume.into());
+                });
             });
         });
-        ui.add_space(8.0);
-        muted(
-            ui,
-            "Changes save automatically. Recordings stop after two minutes.",
-        );
-        if cfg!(target_os = "linux") {
+        section(ui, p, "Try it out");
+        group(ui, p, |ui| {
+            ui.label("Say a sentence. See it here.");
             muted(
                 ui,
-                "On Wayland, bind bolum toggle in your compositor to start dictation.",
+                p,
+                "A sample stays in Bolum. It never types or pastes into another app.",
             );
-        }
+            if ui
+                .add_enabled(
+                    idle && ready,
+                    egui::Button::new("Record a sample").fill(p.selected),
+                )
+                .clicked()
+            {
+                self.copied = false;
+                actions.push(Action::Command("start_preview"));
+            }
+            if !screen.status.transcript.is_empty() {
+                ui.label(&screen.status.transcript);
+            }
+        });
+        changed
+    }
+    fn advanced(&mut self, ui: &mut egui::Ui, p: Palette, screen: &mut Screen) -> bool {
+        let mut changed = false;
+        ui.add_enabled_ui(screen.status.phase=="idle",|ui| {
+            section(ui,p,"App");group(ui,p,|ui| {
+                ui.add_enabled_ui(screen.tray_available,|ui|{changed|=bool_row(ui,p,&mut screen.settings,"Start hidden","start_hidden","Launch into the menu bar instead of opening the settings window.");});divider(ui,p);
+                changed|=bool_row(ui,p,&mut screen.settings,"Show recording overlay","show_overlay","Show a small floating recording indicator without focusing the settings window.");divider(ui,p);
+                let mut seconds=screen.settings.usize("unload_seconds").to_string();
+                row(ui,p,"Unload model","Release model memory after this period of inactivity.",|ui|changed|=combo(ui,"Unload model",&mut seconds,&[("60","After 1 minute"),("300","After 5 minutes"),("900","After 15 minutes"),("0","Never")]));
+                screen.settings.set_quiet("unload_seconds",seconds.parse::<u64>().unwrap_or(60).into());
+            });
+            section(ui,p,"Output");group(ui,p,|ui| {
+                changed|=choice(ui,p,&mut screen.settings,"Paste method","injection","Clipboard mode replaces your text clipboard. Direct typing avoids the clipboard.",&[("clipboard","Clipboard paste"),("type","Direct typing"),("none","Show in Bolum only")]);divider(ui,p);
+                changed|=bool_row(ui,p,&mut screen.settings,"Auto submit","auto_submit","Send Enter after insertion. Leave off when dictating drafts or messages you want to review.");
+            });
+            section(ui,p,"Transcription");group(ui,p,|ui| {
+                changed|=bool_row(ui,p,&mut screen.settings,"Voice activity detection","vad","Energy-based silence detection trims quiet edges. It is not a neural speech classifier.");divider(ui,p);
+                changed|=bool_row(ui,p,&mut screen.settings,"Remove filler words","remove_fillers","Remove standalone English um and uh tokens from the result.");divider(ui,p);
+                changed|=bool_row(ui,p,&mut screen.settings,"Append trailing space","append_trailing_space","Add a space after inserted text.");divider(ui,p);
+                ui.label("Custom word corrections");muted(ui,p,"One exact correction per line: spoken phrase=preferred spelling");
+                let mut words=screen.settings.str("word_replacements");let response=ui.add(egui::TextEdit::multiline(&mut words).desired_width(f32::INFINITY).desired_rows(2).hint_text("bolam=Bolum"));
+                response.widget_info(||egui::WidgetInfo::labeled(egui::WidgetType::TextEdit,true,"Custom word corrections"));
+                if response.changed(){screen.settings.set_quiet("word_replacements",words.into());changed=true;}
+            });
+            section(ui,p,"History");group(ui,p,|ui| {
+                let mut limit=screen.settings.usize("history_limit").to_string();
+                row(ui,p,"History limit","Session-only history. No transcripts or recordings are saved to disk.",|ui|changed|=combo(ui,"History limit",&mut limit,&[("0","Off"),("20","20 entries"),("50","50 entries"),("100","100 entries")]));
+                screen.settings.set_quiet("history_limit",limit.parse::<u64>().unwrap_or(20).into());
+                muted(ui,p,"Audio is never saved. Quitting Bolum clears session history.");
+            });
+        });
         changed
     }
     fn models(
         &mut self,
         ui: &mut egui::Ui,
+        p: Palette,
         screen: &mut Screen,
         actions: &mut Vec<Action>,
     ) -> bool {
         let mut changed = false;
         let mut selected = screen.settings.str("model");
         let idle = screen.status.phase == "idle";
-        // Lead with the default, then the smaller alternative.
-        for id in [
-            "parakeet-tdt-0.6b-v3",
-            "canary-180m-flash",
-            "parakeet-tdt-0.6b-v2",
-        ] {
-            let model = models::find(id).unwrap();
-            let Some(state) = screen.models.iter().find(|entry| entry.id == id) else {
-                continue;
-            };
-            ui.push_id(id, |ui| {
-                group(ui, |ui| {
-                    ui.label(
-                        RichText::new(model.name.trim_start_matches("NVIDIA "))
-                            .strong()
-                            .size(16.0),
-                    );
-                    muted(
-                        ui,
-                        format!(
-                            "{}  ·  {} MB download",
-                            model.languages,
-                            models::total_size(model) / 1_000_000
-                        ),
-                    );
-                    muted(
-                        ui,
-                        match id {
-                            "canary-180m-flash" => {
-                                "The smallest download. Choose your spoken language below."
-                            }
-                            "parakeet-tdt-0.6b-v3" => {
-                                "Recommended. Recognizes the language you speak automatically."
-                            }
-                            _ => "For English dictation with Parakeet v2.",
-                        },
-                    );
-                    if state.downloading {
-                        ui.add(
-                            egui::ProgressBar::new(state.progress)
-                                .fill(ACCENT)
-                                .show_percentage(),
-                        );
-                        if ui.button("Cancel download").clicked() {
-                            actions.push(Action::CancelDownload(id));
-                        }
-                    } else if state.downloaded {
-                        ui.horizontal(|ui| {
-                            if selected == id {
-                                ui.label(RichText::new("Selected model").color(ACCENT).strong());
-                            } else if ui
-                                .add_enabled(idle, egui::Button::new("Use model"))
-                                .clicked()
-                            {
-                                selected = id.into();
-                                changed = true;
-                            }
-                            if ui.add_enabled(idle, egui::Button::new("Remove…")).clicked() {
-                                self.pending_delete = Some(id);
-                            }
-                        });
-                        if self.pending_delete == Some(id) {
-                            ui.separator();
-                            ui.label("Remove this download? You can download it again later.");
-                            ui.horizontal(|ui| {
-                                if ui.button("Keep model").clicked() {
-                                    self.pending_delete = None;
-                                }
-                                if ui
-                                    .add_enabled(idle, egui::Button::new("Delete download"))
-                                    .clicked()
-                                {
-                                    actions.push(Action::Delete(id));
-                                    self.pending_delete = None;
-                                }
-                            });
-                        }
-                    } else if primary(ui, "Download model").clicked() {
-                        actions.push(Action::Download(id));
-                    }
-                    if id == "canary-180m-flash" && selected == id {
-                        ui.add_enabled_ui(idle, |ui| {
-                            ui.scope(|ui| {
-                                let mut language = screen.settings.str("language");
-                                if choice(
-                                    ui,
-                                    "Spoken language",
-                                    &mut language,
-                                    &[
-                                        ("en", "English"),
-                                        ("de", "German"),
-                                        ("es", "Spanish"),
-                                        ("fr", "French"),
-                                    ],
-                                ) {
-                                    screen.settings.set_quiet("language", language.into());
-                                    changed = true;
-                                }
-                            });
-                        });
-                    }
-                });
-            });
-            ui.add_space(4.0);
-        }
-        screen.settings.set_quiet("model", selected.clone().into());
         muted(
             ui,
-            "Weights are stored separately from the app and verified after download.",
+            p,
+            "Select a transcription model or download another. All models run locally on your CPU.",
         );
-        changed
-    }
-    fn audio(&mut self, ui: &mut egui::Ui, screen: &mut Screen, actions: &mut Vec<Action>) -> bool {
-        let mut changed = false;
-        let idle = screen.status.phase == "idle";
-        ui.add_enabled_ui(idle, |ui| {
-            section(ui, "Input device");
-            group(ui, |ui| {
-                let mut microphone = screen.settings.str("microphone");
-                let mut devices = vec![(String::new(), "System default".to_string())];
-                devices.extend(screen.microphones.iter().map(|name| (name.clone(), name.clone())));
-                let options: Vec<_> = devices.iter().map(|(id, name)| (id.as_str(), name.as_str())).collect();
-                if choice(ui, "Microphone", &mut microphone, &options) { screen.settings.set_quiet("microphone", microphone.into()); changed = true; }
-                if screen.microphones.is_empty() { muted(ui, "No input devices found. Connect a microphone, allow access, then refresh."); }
-                if ui.button("Refresh devices").clicked() { actions.push(Action::RefreshMicrophones); }
-            });
-            section(ui, "Try your microphone");
-            group(ui, |ui| {
-                ui.label("Say a sentence. See it here.");
-                muted(ui, "This test shows your transcript in Bolum without typing or pasting into another app.");
-                let ready = screen.models.iter().any(|model| model.id == screen.settings.str("model") && model.downloaded);
-                if ui.add_enabled(ready, egui::Button::new("Record a sample").fill(LAVENDER)).clicked() { self.copied = false; actions.push(Action::Command("start_preview")); }
-                if !ready { muted(ui, "Download and select a speech model first."); }
+        ui.add_space(12.0);
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(icon::MAGNIFYING_GLASS).color(p.muted));
+            let r = ui.add_sized(
+                [ui.available_width(), 34.0],
+                egui::TextEdit::singleline(&mut self.search).hint_text("Search models by name…"),
+            );
+            r.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, "Search models")
             });
         });
-        if !screen.status.transcript.is_empty() {
-            section(ui, "Latest result");
-            group(ui, |ui| {
-                ui.label(&screen.status.transcript);
-            });
-        }
-        #[cfg(target_os = "macos")]
-        {
-            ui.add_space(8.0);
-            if ui.button("Open microphone permissions").clicked() {
-                actions.push(Action::Permissions("microphone"));
+        ui.horizontal(|ui| {
+            muted(ui, p, "Language");
+            combo(
+                ui,
+                "Filter language",
+                &mut self.language_filter,
+                &[
+                    ("", "All languages"),
+                    ("en", "English"),
+                    ("multi", "Multilingual"),
+                ],
+            );
+        });
+        let query = self.search.trim().to_lowercase();
+        let mut matches = 0;
+        for downloaded in [true, false] {
+            let candidates: Vec<_> = [
+                "parakeet-tdt-0.6b-v3",
+                "canary-180m-flash",
+                "parakeet-tdt-0.6b-v2",
+            ]
+            .into_iter()
+            .filter_map(|id| {
+                let state = screen.models.iter().find(|m| m.id == id)?;
+                let model = models::find(id).ok()?;
+                if state.downloaded != downloaded
+                    || !model.name.to_lowercase().contains(&query)
+                    || (self.language_filter == "multi" && model.languages == "en")
+                {
+                    None
+                } else {
+                    Some((model, state))
+                }
+            })
+            .collect();
+            if candidates.is_empty() {
+                continue;
+            }
+            section(
+                ui,
+                p,
+                if downloaded {
+                    "Downloaded models"
+                } else {
+                    "Available to download"
+                },
+            );
+            for (model, state) in candidates {
+                matches += 1;
+                let id = model.id;
+                ui.push_id(id,|ui| {
+                    let active=selected==id&&state.downloaded;
+                    let frame=egui::Frame::new().fill(if active {if p.bg.r()<100 {Color32::from_rgb(57,46,72)}else{Color32::from_rgb(241,233,252)}}else{p.card}).corner_radius(12).stroke(Stroke::new(if active {2.0_f32}else{1.0_f32},if active {p.selected}else{p.border})).inner_margin(18);
+                    frame.show(ui,|ui|{
+                        ui.set_width(ui.available_width());
+                        ui.horizontal_wrapped(|ui|{
+                            ui.label(RichText::new(model.name.trim_start_matches("NVIDIA ")).strong().size(18.0));
+                            if active {ui.label(RichText::new(format!("{} Active",icon::CHECK)).color(p.accent));}
+                            else if id=="parakeet-tdt-0.6b-v3"{ui.label(RichText::new("Recommended").color(p.accent).size(12.0));}
+                        });
+                        muted(ui,p,match id {"canary-180m-flash"=>"Small and responsive, with four languages and English translation.","parakeet-tdt-0.6b-v3"=>"Accurate multilingual dictation with automatic language recognition.",_=>"English dictation with the Parakeet v2 model."});
+                        divider(ui,p);
+                        ui.horizontal_wrapped(|ui|{
+                            muted(ui,p,format!("{}  {}",icon::GLOBE,model.languages));muted(ui,p,format!("{}  {} MB",icon::HARD_DRIVES,models::total_size(model)/1_000_000));
+                            if state.downloading {if ui.button("Cancel download").clicked(){actions.push(Action::CancelDownload(id));}}
+                            else if state.downloaded {
+                                if !active&&ui.add_enabled(idle,egui::Button::new("Use model")).clicked(){selected=id.into();changed=true;}
+                                if ui.add_enabled(idle,egui::Button::new(RichText::new(format!("{} Delete",icon::TRASH)).color(p.accent)).frame(false)).clicked(){self.pending_delete=Some(id);}
+                            }else if accent_button(ui,"Download model",p).clicked(){actions.push(Action::Download(id));}
+                        });
+                        if state.downloading{ui.add(egui::ProgressBar::new(state.progress).fill(p.selected).show_percentage());}
+                        if self.pending_delete==Some(id) {
+                            ui.label("Remove this download? It can be downloaded again later.");ui.horizontal(|ui|{
+                                if ui.button("Keep model").clicked(){self.pending_delete=None;}
+                                if ui.add_enabled(idle,egui::Button::new("Delete download")).clicked(){actions.push(Action::Delete(id));self.pending_delete=None;}
+                            });
+                        }
+                    });
+                });
+                ui.add_space(6.0);
             }
         }
+        if matches == 0 {
+            muted(
+                ui,
+                p,
+                "No models match your search. Try another name or language filter.",
+            );
+        }
+        screen.settings.set_quiet("model", selected.into());
         changed
     }
-    fn transcript(&mut self, ui: &mut egui::Ui, screen: &Screen, actions: &mut Vec<Action>) {
-        if screen.status.transcript.is_empty() {
-            group(ui, |ui| {
-                ui.label(
-                    RichText::new("Your next thought starts here.")
-                        .size(19.0)
-                        .strong(),
-                );
-                muted(ui, "Dictate with your shortcut, or record a sample in Audio input. Your words will appear here.");
-                if ui.button("Try your microphone").clicked() {
-                    self.page = Page::Audio;
-                }
-            });
-        } else {
-            group(ui, |ui| {
+    fn history(
+        &mut self,
+        ui: &mut egui::Ui,
+        p: Palette,
+        screen: &Screen,
+        actions: &mut Vec<Action>,
+    ) {
+        muted(
+            ui,
+            p,
+            "Your words stay on this device. Session history is cleared when you quit.",
+        );
+        if !screen.status.transcript.is_empty() {
+            section(ui, p, "Latest dictation");
+            group(ui, p, |ui| {
                 ui.add(
                     egui::Label::new(RichText::new(&screen.status.transcript).size(17.0))
                         .selectable(true)
                         .wrap(),
                 );
-                ui.separator();
                 ui.horizontal(|ui| {
-                    if primary(ui, if self.copied { "Copied" } else { "Copy text" }).clicked() {
+                    if accent_button(ui, if self.copied { "Copied" } else { "Copy text" }, p)
+                        .clicked()
+                    {
                         actions.push(Action::Copy);
                     }
                     if ui.button("Clear transcript").clicked() {
-                        self.copied = false;
                         actions.push(Action::ClearTranscript);
+                        self.copied = false;
                     }
                 });
             });
         }
-        ui.add_space(8.0);
-        muted(
-            ui,
-            "Only the latest transcript is kept in memory. Quitting Bolum clears it.",
-        );
+        if screen.status.history.is_empty() {
+            section(ui, p, "Session history");
+            group(ui, p, |ui| {
+                ui.label("Your next thought starts here.");
+                muted(
+                    ui,
+                    p,
+                    "Dictate with your shortcut or try a microphone sample in General.",
+                );
+                if ui.button("Try your microphone").clicked() {
+                    self.page = Page::General;
+                }
+            });
+        } else {
+            section(ui, p, "Session history");
+            if ui.button("Clear session history").clicked() {
+                actions.push(Action::ClearHistory);
+            }
+            for entry in &screen.status.history {
+                ui.push_id(entry.id, |ui| {
+                    group(ui, p, |ui| {
+                        ui.label(&entry.text);
+                        muted(ui, p, &entry.model);
+                        ui.horizontal(|ui| {
+                            if ui.button("Copy entry").clicked() {
+                                actions.push(Action::CopyEntry(entry.text.clone()));
+                            }
+                            if ui.button("Delete entry").clicked() {
+                                actions.push(Action::DeleteEntry(entry.id));
+                            }
+                        });
+                    });
+                });
+            }
+        }
     }
-    fn about(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
-        group(ui, |ui| {
-            ui.label(RichText::new("Bolum").size(24.0).strong().color(ACCENT));
-            muted(
+    fn about(
+        &mut self,
+        ui: &mut egui::Ui,
+        p: Palette,
+        screen: &mut Screen,
+        actions: &mut Vec<Action>,
+    ) -> bool {
+        let mut changed = false;
+        section(ui, p, "About");
+        group(ui, p, |ui| {
+            changed|=choice(ui,p,&mut screen.settings,"Application theme","theme","Follow system appearance or choose a light or dark surface. Purple remains the accent.",&[("system","System"),("light","Light"),("dark","Dark")]);
+            divider(ui, p);
+            row(ui, p, "Version", "", |ui| {
+                ui.label(format!("v{}", env!("CARGO_PKG_VERSION")));
+            });
+            divider(ui, p);
+            row(
                 ui,
-                format!(
-                    "Version {} · Made for everyday dictation",
-                    env!("CARGO_PKG_VERSION")
-                ),
+                p,
+                "Source code",
+                "Open the project's source repository.",
+                |ui| {
+                    if ui.button("View on GitHub").clicked() {
+                        actions.push(Action::OpenSource);
+                    }
+                },
             );
-            ui.label("Speak naturally. Your computer does the writing.");
-            muted(ui, "Speech is processed locally using NVIDIA Parakeet or Canary. No recordings or transcripts are saved to disk.");
+            divider(ui, p);
+            ui.label("App data directory");
+            ui.horizontal_wrapped(|ui| {
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(crate::settings::data_dir().display().to_string())
+                            .monospace()
+                            .size(12.0),
+                    )
+                    .wrap()
+                    .selectable(true),
+                );
+                if ui.button("Open folder").clicked() {
+                    actions.push(Action::OpenData);
+                }
+            });
         });
-        section(ui, "Permissions");
-        group(ui, |ui| {
-            ui.strong("Microphone");
-            muted(ui, "Allows Bolum to hear you while a recording is active.");
-            #[cfg(target_os = "macos")]
-            if ui.button("Microphone settings").clicked() {
-                actions.push(Action::Permissions("microphone"));
-            }
-            ui.separator();
-            ui.strong("Accessibility");
-            muted(ui, "Allows Bolum to insert words into another app. You can use Show in Bolum only without text insertion access.");
-            #[cfg(target_os = "macos")]
-            if ui.button("Accessibility settings").clicked() {
-                actions.push(Action::Permissions("accessibility"));
-            }
+        section(ui, p, "Permissions");
+        group(ui, p, |ui| {
+            row(
+                ui,
+                p,
+                "Microphone",
+                "Required to hear you while you dictate.",
+                |ui| {
+                    #[cfg(target_os = "macos")]
+                    if ui.button("Microphone settings").clicked() {
+                        actions.push(Action::Permissions("microphone"));
+                    }
+                    #[cfg(not(target_os = "macos"))]
+                    ui.label("System microphone access");
+                },
+            );
+            divider(ui, p);
+            row(
+                ui,
+                p,
+                "Accessibility",
+                "Required on macOS to insert text into another app.",
+                |ui| {
+                    #[cfg(target_os = "macos")]
+                    if ui.button("Accessibility settings").clicked() {
+                        actions.push(Action::Permissions("accessibility"));
+                    }
+                    #[cfg(not(target_os = "macos"))]
+                    ui.label("Native text input");
+                },
+            );
         });
-        #[cfg(not(target_os = "macos"))]
-        let _ = actions;
-        ui.add_space(8.0);
-        muted(
-            ui,
-            "Inspired by Handy. Built in Rust. NVIDIA models: CC-BY-4.0. Application: MIT.",
-        );
+        section(ui, p, "Acknowledgments");
+        group(ui, p, |ui| {
+            ui.strong("Local speech recognition");
+            muted(ui,p,"NVIDIA Parakeet and Canary models run through ONNX Runtime. Model exports: onnx-asr / istupakov.");
+            divider(ui, p);
+            ui.strong("Made for your desktop");
+            muted(ui,p,"Inspired by Handy. Built in Rust with egui. Icons by Phosphor. App: MIT. NVIDIA models: CC-BY-4.0.");
+        });
+        changed
     }
 }
 fn shortcut_label(value: &str) -> String {
     value
         .split('+')
         .map(|key| match key.trim().to_lowercase().as_str() {
-            "ctrl" | "control" => "Control".into(),
-            "alt" | "option" => "Option".into(),
-            "super" | "meta" | "cmd" => "Command".into(),
+            "ctrl" | "control" => "Ctrl".into(),
+            "alt" | "option" => {
+                if cfg!(target_os = "macos") {
+                    "Option".into()
+                } else {
+                    "Alt".into()
+                }
+            }
+            "super" | "meta" | "cmd" => {
+                if cfg!(target_os = "macos") {
+                    "Command".into()
+                } else {
+                    "Super".into()
+                }
+            }
             "shift" => "Shift".into(),
             "space" => "Space".into(),
             _ => key.to_uppercase(),
         })
         .collect::<Vec<_>>()
-        .join("  +  ")
+        .join(" + ")
 }

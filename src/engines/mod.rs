@@ -25,7 +25,15 @@ impl Loaded {
         let language = settings.str("language");
         match self {
             Self::Parakeet(engine) => engine.transcribe(samples),
-            Self::Canary(engine) => engine.transcribe(samples, &language, ""),
+            Self::Canary(engine) => engine.transcribe(
+                samples,
+                &language,
+                if settings.bool("translate_english") {
+                    "en"
+                } else {
+                    ""
+                },
+            ),
         }
     }
 }

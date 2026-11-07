@@ -331,6 +331,75 @@ pub fn input_devices() -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Short local feedback tone; lives on its own thread like microphone capture.
+pub fn output_devices() -> Vec<String> {
+    cpal::default_host()
+        .devices()
+        .map(|devices| {
+            devices
+                .filter(|d| d.supports_output())
+                .filter_map(|d| device_name(&d))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+pub fn feedback(device: Option<String>, volume: f32) {
+    std::thread::spawn(move || {
+        let result = (|| -> Result<()> {
+            let host = cpal::default_host();
+            let device = if let Some(name) = device {
+                host.devices()?
+                    .find(|d| d.supports_output() && device_name(d).as_deref() == Some(&name))
+                    .ok_or_else(|| anyhow!("output device not found"))?
+            } else {
+                host.default_output_device()
+                    .ok_or_else(|| anyhow!("no output device"))?
+            };
+            let supported = device.default_output_config()?;
+            fn tone<T: cpal::SizedSample + cpal::FromSample<f32>>(
+                device: &cpal::Device,
+                config: cpal::StreamConfig,
+                volume: f32,
+            ) -> Result<cpal::Stream> {
+                let channels = config.channels as usize;
+                let rate = config.sample_rate as f32;
+                let mut frame = 0;
+                Ok(device.build_output_stream(
+                    config,
+                    move |data: &mut [T], _| {
+                        for samples in data.chunks_mut(channels) {
+                            let time = frame as f32 / rate;
+                            frame += 1;
+                            let envelope = (1.0 - time / 0.12).clamp(0.0, 1.0);
+                            let value = (time * 880.0 * std::f32::consts::TAU).sin()
+                                * envelope
+                                * volume.clamp(0.0, 1.0)
+                                * 0.15;
+                            for sample in samples {
+                                *sample = T::from_sample(value);
+                            }
+                        }
+                    },
+                    |err| log::warn!("feedback: {err}"),
+                    None,
+                )?)
+            }
+            let stream = match supported.sample_format() {
+                cpal::SampleFormat::F32 => tone::<f32>(&device, supported.config(), volume)?,
+                cpal::SampleFormat::I16 => tone::<i16>(&device, supported.config(), volume)?,
+                cpal::SampleFormat::U16 => tone::<u16>(&device, supported.config(), volume)?,
+                _ => return Ok(()),
+            };
+            stream.play()?;
+            std::thread::sleep(std::time::Duration::from_millis(160));
+            Ok(())
+        })();
+        if let Err(err) = result {
+            log::warn!("audio feedback: {err}");
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

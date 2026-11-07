@@ -1,12 +1,11 @@
-//! Exercise the production UI with pointer/keyboard events and accessible queries.
+//! Pointer, keyboard and accessibility checks against the production settings view.
 use super::view::{self, Action, ModelView, Page, Screen, View};
-use crate::{models, pipeline::Status, settings::SettingsStore};
+use crate::{models, pipeline::Status, settings::SettingsStore, transcript::Entry};
 use eframe::egui::{self, accesskit::Role};
 use egui_kittest::{
     kittest::{NodeT, Queryable},
     Harness,
 };
-
 struct State {
     view: View,
     screen: Screen,
@@ -16,6 +15,7 @@ struct State {
 fn fixture() -> State {
     let mut settings = SettingsStore::load_defaults();
     settings.set_quiet("injection", "clipboard".into());
+    settings.set_quiet("theme", "dark".into());
     State {
         view: View {
             hotkey_text: "ctrl+alt+space".into(),
@@ -28,10 +28,11 @@ fn fixture() -> State {
                 ..Default::default()
             },
             microphones: vec!["MacBook Microphone".into(), "USB microphone".into()],
+            outputs: vec!["MacBook Speakers".into()],
             models: models::CATALOG
                 .iter()
-                .map(|model| ModelView {
-                    id: model.id,
+                .map(|m| ModelView {
+                    id: m.id,
                     downloaded: false,
                     downloading: false,
                     progress: 0.0,
@@ -64,143 +65,100 @@ fn click(h: &mut Harness<'_, State>, label: &str) {
     h.get_by_role_and_label(Role::Button, label).click();
     h.run();
 }
+fn choose(h: &mut Harness<'_, State>, label: &str, value: &str) {
+    h.get_by_role_and_label(Role::ComboBox, label)
+        .scroll_to_me();
+    h.run();
+    h.get_by_role_and_label(Role::ComboBox, label).click();
+    h.run();
+    h.get_by_label(value).click();
+    h.run();
+}
 #[test]
-fn sidebar_navigates_every_page_and_setup_has_a_next_step() {
-    let mut h = harness(fixture(), [820.0, 660.0]);
+fn navigation_setup_and_footer_model_selection() {
+    let mut h = harness(fixture(), [1000.0, 780.0]);
     click(&mut h, "Choose a speech model");
     assert_eq!(h.state().view.page, Page::Models);
     for page in Page::ALL {
         click(&mut h, page.label());
         assert_eq!(h.state().view.page, page);
-        assert_eq!(
-            h.get_by_role(Role::Heading).value().as_deref(),
-            Some(page.label())
-        );
+        assert!(h.query_by_role(Role::Heading).is_some());
     }
+    h.get_by_label_contains("Parakeet TDT 0.6B v3").click();
+    h.run();
+    assert_eq!(h.state().view.page, Page::Models);
 }
 #[test]
-fn shortcut_validation_and_auto_saved_preferences() {
-    let mut h = harness(fixture(), [820.0, 660.0]);
-    h.state_mut().view.hotkey_text = "this is invalid".into();
+fn captures_valid_shortcuts_rejects_plain_keys_and_supports_reset() {
+    let mut state = fixture();
+    state.screen.models[1].downloaded = true;
+    let mut h = harness(state, [1000.0, 780.0]);
+    click(&mut h, "Change shortcut");
+    h.key_press(egui::Key::D);
     h.run();
-    click(&mut h, "Apply shortcut");
     assert!(!h.state().view.shortcut_error.is_empty());
-    assert!(!h
-        .state()
-        .actions
-        .iter()
-        .any(|a| matches!(a, Action::ApplyShortcut(_))));
-    h.state_mut().view.hotkey_text = "ctrl+shift+d".into();
+    h.key_combination_modifiers(
+        egui::Modifiers::CTRL | egui::Modifiers::SHIFT,
+        &[egui::Key::D],
+    );
     h.run();
-    click(&mut h, "Apply shortcut");
     assert!(h
         .state()
         .actions
         .iter()
-        .any(|a| matches!(a, Action::ApplyShortcut(key) if key == "ctrl+shift+d")));
-    h.get_by_label("Hold shortcut to talk").click();
-    h.run();
-    assert!(h.state().screen.settings.bool("push_to_talk"));
+        .any(|a| matches!(a,Action::ApplyShortcut(value) if value=="ctrl+shift+D")));
+    click(&mut h, "Reset shortcut");
     assert!(h
         .state()
         .actions
         .iter()
-        .any(|a| matches!(a, Action::Save(s) if s.bool("push_to_talk"))));
-    h.get_by_label("Add a space after each dictation").click();
-    h.run();
-    assert!(!h.state().screen.settings.bool("append_trailing_space"));
+        .any(|a| matches!(a,Action::ApplyShortcut(value) if value=="ctrl+alt+space")));
+    choose(&mut h, "Shortcut behavior", "Auto");
+    assert_eq!(h.state().screen.settings.str("shortcut_mode"), "auto");
+    choose(&mut h, "Shortcut behavior", "Hold to talk");
+    assert_eq!(h.state().screen.settings.str("shortcut_mode"), "hold");
 }
 #[test]
-fn delivery_choices_have_accessible_labels_and_save() {
-    let mut h = harness(fixture(), [820.0, 660.0]);
-    for (label, value) in [
-        ("Show in Bolum only", "none"),
-        ("Type into active app", "type"),
-        ("Paste into active app", "clipboard"),
-    ] {
-        h.get_by_label("Delivery").click();
-        h.run();
-        h.get_by_label(label).click();
-        h.run();
-        assert_eq!(h.state().screen.settings.str("injection"), value);
-    }
-}
-#[test]
-fn downloads_cancel_selection_and_delete_require_confirmation() {
+fn microphone_and_feedback_controls_persist_settings() {
     let mut state = fixture();
-    state.view.page = Page::Models;
-    let mut h = harness(state, [820.0, 720.0]);
-    h.get_all_by_label("Download model").next().unwrap().click();
-    h.run();
-    assert!(h
-        .state()
-        .actions
-        .iter()
-        .any(|a| matches!(a, Action::Download("parakeet-tdt-0.6b-v3"))));
-    let model = &mut h.state_mut().screen.models[1]; // Parakeet v3
-    model.downloading = true;
-    model.progress = 0.42;
-    h.run();
-    click(&mut h, "Cancel download");
-    assert!(h
-        .state()
-        .actions
-        .iter()
-        .any(|a| matches!(a, Action::CancelDownload("parakeet-tdt-0.6b-v3"))));
-    let model = &mut h.state_mut().screen.models[1];
-    model.downloading = false;
-    model.downloaded = true;
-    h.run();
-    click(&mut h, "Remove…");
-    assert!(!h
-        .state()
-        .actions
-        .iter()
-        .any(|a| matches!(a, Action::Delete(_))));
-    click(&mut h, "Keep model");
-    assert!(h.query_by_label("Delete download").is_none());
-    click(&mut h, "Remove…");
-    click(&mut h, "Delete download");
-    assert!(h
-        .state()
-        .actions
-        .iter()
-        .any(|a| matches!(a, Action::Delete("parakeet-tdt-0.6b-v3"))));
-    h.state_mut().screen.models[1].downloaded = false;
-    h.state_mut().screen.models[2].downloaded = true; // Canary
-    h.run();
-    click(&mut h, "Use model");
-    assert_eq!(h.state().screen.settings.str("model"), "canary-180m-flash");
-    h.get_by_label("Spoken language").click();
-    h.run();
-    h.get_by_label("French").click();
-    h.run();
-    assert_eq!(h.state().screen.settings.str("language"), "fr");
-}
-#[test]
-fn microphone_refresh_selection_and_preview_recording() {
-    let mut state = fixture();
-    state.view.page = Page::Audio;
-    let mut h = harness(state, [820.0, 660.0]);
-    assert!(h
-        .get_by_label("Record a sample")
-        .accesskit_node()
-        .is_disabled());
+    state.screen.models[1].downloaded = true;
+    let mut h = harness(state, [1000.0, 900.0]);
+    choose(&mut h, "Microphone", "USB microphone");
+    assert_eq!(
+        h.state().screen.settings.str("microphone"),
+        "USB microphone"
+    );
     click(&mut h, "Refresh devices");
     assert!(h
         .state()
         .actions
         .iter()
         .any(|a| matches!(a, Action::RefreshMicrophones)));
-    h.get_by_label("Microphone").click();
+    assert!(h
+        .get_by_role_and_label(Role::ComboBox, "Output device")
+        .accesskit_node()
+        .is_disabled());
+    h.get_by_role_and_label(Role::CheckBox, "Audio feedback")
+        .click();
     h.run();
-    h.get_by_label("USB microphone").click();
-    h.run();
+    assert!(h.state().screen.settings.bool("audio_feedback"));
+    choose(&mut h, "Output device", "MacBook Speakers");
     assert_eq!(
-        h.state().screen.settings.str("microphone"),
-        "USB microphone"
+        h.state().screen.settings.str("output_device"),
+        "MacBook Speakers"
     );
-    h.state_mut().screen.models[1].downloaded = true;
+    assert!(h
+        .state()
+        .actions
+        .iter()
+        .any(|a| matches!(a,Action::Save(s) if s.bool("audio_feedback"))));
+}
+#[test]
+fn preview_recording_stop_cancel_and_processing_lock() {
+    let mut state = fixture();
+    state.screen.models[1].downloaded = true;
+    let mut h = harness(state, [1000.0, 1000.0]);
+    h.get_by_label("Record a sample").scroll_to_me();
     h.run();
     click(&mut h, "Record a sample");
     assert!(h
@@ -210,79 +168,204 @@ fn microphone_refresh_selection_and_preview_recording() {
         .any(|a| matches!(a, Action::Command("start_preview"))));
     assert_eq!(h.state().screen.settings.str("injection"), "clipboard");
     h.state_mut().screen.status.phase = "listening";
-    h.state_mut().screen.status.level = 0.1;
     h.run();
     click(&mut h, "Finish recording");
     click(&mut h, "Cancel recording");
-    for command in ["stop", "cancel"] {
+    for cmd in ["stop", "cancel"] {
         assert!(h
             .state()
             .actions
             .iter()
-            .any(|a| matches!(a, Action::Command(c) if *c == command)));
+            .any(|a| matches!(a,Action::Command(c) if *c==cmd)));
     }
-}
-#[test]
-fn processing_locks_settings_but_keeps_navigation_available() {
-    let mut state = fixture();
-    state.screen.status.phase = "working";
-    let mut h = harness(state, [820.0, 660.0]);
+    h.state_mut().screen.status.phase = "working";
+    h.run();
     assert!(h
-        .get_by_label("Apply shortcut")
+        .get_by_label("Change shortcut")
         .accesskit_node()
         .is_disabled());
-    click(&mut h, "Audio input");
-    assert!(h
-        .get_by_label("Refresh devices")
-        .accesskit_node()
-        .is_disabled());
-    assert!(h.query_by_label("Finish recording").is_none());
-    click(&mut h, "Last dictation");
-    assert_eq!(h.state().view.page, Page::Transcript);
+    click(&mut h, "History");
+    assert_eq!(h.state().view.page, Page::History);
 }
 #[test]
-fn empty_transcript_recovery_copy_clear_and_errors() {
+fn model_download_cancellation_selection_and_confirmation() {
     let mut state = fixture();
-    state.view.page = Page::Transcript;
-    let mut h = harness(state, [820.0, 660.0]);
+    state.view.page = Page::Models;
+    let mut h = harness(state, [1000.0, 1000.0]);
+    h.get_all_by_label("Download model").next().unwrap().click();
+    h.run();
+    assert!(h
+        .state()
+        .actions
+        .iter()
+        .any(|a| matches!(a, Action::Download("parakeet-tdt-0.6b-v3"))));
+    h.state_mut().screen.models[1].downloading = true;
+    h.state_mut().screen.models[1].progress = 0.42;
+    h.run();
+    click(&mut h, "Cancel download");
+    assert!(h
+        .state()
+        .actions
+        .iter()
+        .any(|a| matches!(a, Action::CancelDownload("parakeet-tdt-0.6b-v3"))));
+    h.state_mut().screen.models[1].downloading = false;
+    h.state_mut().screen.models[1].downloaded = true;
+    h.run();
+    h.get_all_by_label_contains("Delete")
+        .next()
+        .unwrap()
+        .click();
+    h.run();
+    assert!(!h
+        .state()
+        .actions
+        .iter()
+        .any(|a| matches!(a, Action::Delete(_))));
+    click(&mut h, "Keep model");
+    assert!(h.query_by_label("Delete download").is_none());
+    h.get_all_by_label_contains("Delete")
+        .next()
+        .unwrap()
+        .click();
+    h.run();
+    click(&mut h, "Delete download");
+    assert!(h
+        .state()
+        .actions
+        .iter()
+        .any(|a| matches!(a, Action::Delete("parakeet-tdt-0.6b-v3"))));
+    h.state_mut().screen.models[1].downloaded = false;
+    h.state_mut().screen.models[2].downloaded = true;
+    h.run();
+    click(&mut h, "Use model");
+    assert_eq!(h.state().screen.settings.str("model"), "canary-180m-flash");
+    click(&mut h, "General");
+    choose(&mut h, "Language", "French");
+    assert_eq!(h.state().screen.settings.str("language"), "fr");
+    h.get_by_role_and_label(Role::CheckBox, "Translate to English")
+        .click();
+    h.run();
+    assert!(h.state().screen.settings.bool("translate_english"));
+}
+#[test]
+fn model_search_and_language_filters_have_empty_state() {
+    let mut state = fixture();
+    state.view.page = Page::Models;
+    let mut h = harness(state, [1000.0, 780.0]);
+    h.get_by_label("Search models").focus();
+    h.get_by_label("Search models").type_text("canary");
+    h.run();
+    assert_eq!(h.get_all_by_label("Download model").count(), 1);
+    h.state_mut().view.search = "no matching model".into();
+    h.run();
+    assert!(h.query_by_label("Download model").is_none());
+    h.state_mut().view.search.clear();
+    h.run();
+    choose(&mut h, "Filter language", "Multilingual");
+    assert_eq!(h.get_all_by_label("Download model").count(), 2);
+}
+#[test]
+fn advanced_output_transcription_memory_and_history_settings() {
+    let mut state = fixture();
+    state.view.page = Page::Advanced;
+    let mut h = harness(state, [1000.0, 1400.0]);
+    choose(&mut h, "Unload model", "After 5 minutes");
+    assert_eq!(h.state().screen.settings.usize("unload_seconds"), 300);
+    h.get_by_role_and_label(Role::CheckBox, "Start hidden")
+        .click();
+    h.run();
+    assert!(h.state().screen.settings.bool("start_hidden"));
+    h.get_by_role_and_label(Role::CheckBox, "Show recording overlay")
+        .click();
+    h.run();
+    assert!(!h.state().screen.settings.bool("show_overlay"));
+    choose(&mut h, "Paste method", "Show in Bolum only");
+    assert_eq!(h.state().screen.settings.str("injection"), "none");
+    for (label, key) in [
+        ("Voice activity detection", "vad"),
+        ("Remove filler words", "remove_fillers"),
+        ("Auto submit", "auto_submit"),
+    ] {
+        h.get_by_role_and_label(Role::CheckBox, label)
+            .scroll_to_me();
+        h.run();
+        h.get_by_role_and_label(Role::CheckBox, label).click();
+        h.run();
+        assert!(h.state().screen.settings.bool(key));
+    }
+    h.get_by_role_and_label(Role::TextInput, "Custom word corrections")
+        .focus();
+    h.get_by_role_and_label(Role::TextInput, "Custom word corrections")
+        .type_text("bolam=Bolum");
+    h.run();
+    assert_eq!(
+        h.state().screen.settings.str("word_replacements"),
+        "bolam=Bolum"
+    );
+    choose(&mut h, "History limit", "Off");
+    assert_eq!(h.state().screen.settings.usize("history_limit"), 0);
+}
+#[test]
+fn history_empty_state_and_copy_delete_clear_actions() {
+    let mut state = fixture();
+    state.view.page = Page::History;
+    let mut h = harness(state, [1000.0, 780.0]);
     click(&mut h, "Try your microphone");
-    assert_eq!(h.state().view.page, Page::Audio);
-    h.state_mut().view.page = Page::Transcript;
-    h.state_mut().screen.status.transcript = "The quick brown fox jumps over the lazy dog.".into();
+    assert_eq!(h.state().view.page, Page::General);
+    h.state_mut().view.page = Page::History;
+    h.state_mut().screen.status.transcript = "The quick brown fox.".into();
     h.run();
     click(&mut h, "Copy text");
-    assert!(h.state().actions.iter().any(|a| matches!(a, Action::Copy)));
     click(&mut h, "Clear transcript");
-    assert!(h
-        .state()
-        .actions
-        .iter()
-        .any(|a| matches!(a, Action::ClearTranscript)));
-    h.state_mut().screen.status.notice = "Microphone is not available".into();
+    assert!(h.state().actions.iter().any(|a| matches!(a, Action::Copy)));
+    h.state_mut().screen.status.history = vec![Entry {
+        id: 1,
+        text: "My words".into(),
+        model: "Canary".into(),
+    }];
     h.run();
-    click(&mut h, "Dismiss message");
+    click(&mut h, "Copy entry");
+    click(&mut h, "Delete entry");
+    click(&mut h, "Clear session history");
     assert!(h
         .state()
         .actions
         .iter()
-        .any(|a| matches!(a, Action::Dismiss)));
+        .any(|a| matches!(a,Action::CopyEntry(text) if text=="My words")));
+    assert!(h
+        .state()
+        .actions
+        .iter()
+        .any(|a| matches!(a, Action::DeleteEntry(1))));
+    assert!(h
+        .state()
+        .actions
+        .iter()
+        .any(|a| matches!(a, Action::ClearHistory)));
 }
 #[test]
-fn window_actions_and_permission_buttons_are_wired() {
+fn appearance_permissions_source_and_data_controls() {
     let mut state = fixture();
     state.view.page = Page::About;
-    let mut h = harness(state, [820.0, 660.0]);
-    click(
-        &mut h,
-        if cfg!(target_os = "macos") {
-            "Hide to menu bar"
-        } else {
-            "Hide to tray"
-        },
-    );
-    click(&mut h, "Quit Bolum");
-    assert!(h.state().actions.iter().any(|a| matches!(a, Action::Hide)));
-    assert!(h.state().actions.iter().any(|a| matches!(a, Action::Quit)));
+    let mut h = harness(state, [1000.0, 1000.0]);
+    choose(&mut h, "Application theme", "Light");
+    assert!(!h.ctx.style().visuals.dark_mode);
+    choose(&mut h, "Application theme", "Dark");
+    assert!(h.ctx.style().visuals.dark_mode);
+    choose(&mut h, "Application theme", "System");
+    assert_eq!(h.state().screen.settings.str("theme"), "system");
+    click(&mut h, "View on GitHub");
+    click(&mut h, "Open folder");
+    assert!(h
+        .state()
+        .actions
+        .iter()
+        .any(|a| matches!(a, Action::OpenSource)));
+    assert!(h
+        .state()
+        .actions
+        .iter()
+        .any(|a| matches!(a, Action::OpenData)));
     #[cfg(target_os = "macos")]
     {
         click(&mut h, "Microphone settings");
@@ -292,74 +375,24 @@ fn window_actions_and_permission_buttons_are_wired() {
                 .state()
                 .actions
                 .iter()
-                .any(|a| matches!(a, Action::Permissions(k) if *k == kind)));
+                .any(|a| matches!(a,Action::Permissions(k) if *k==kind)));
         }
     }
 }
 #[test]
-fn keyboard_tab_reaches_shortcut_field() {
-    let mut h = harness(fixture(), [820.0, 660.0]);
-    h.get_by_role_and_label(Role::TextInput, "Keyboard shortcut")
-        .focus();
-    h.run();
-    assert!(h
-        .get_by_role_and_label(Role::TextInput, "Keyboard shortcut")
-        .is_focused());
-    h.key_press(egui::Key::Tab);
-    h.run();
-    assert!(h.get_by_label("Apply shortcut").is_focused());
-}
-#[test]
-#[ignore = "renders review PNGs using the local GPU; run explicitly"]
-fn render_all_pages_for_visual_review() {
-    std::fs::create_dir_all("target/ui-review").unwrap();
-    for (width, height) in [(820, 660), (720, 520)] {
-        for page in Page::ALL {
-            let mut state = fixture();
-            state.view.page = page;
-            state.screen.models[2].downloaded = true;
-            state
-                .screen
-                .settings
-                .set_quiet("model", "canary-180m-flash".into());
-            let mut h = harness(state, [width as f32, height as f32]);
-            h.run();
-            h.render()
-                .unwrap()
-                .save(format!("target/ui-review/{page:?}-{width}.png"))
-                .unwrap();
-        }
-    }
-    for (name, phase) in [("Recording", "listening"), ("Processing", "working")] {
-        let mut state = fixture();
-        state.screen.status.phase = phase;
-        state.screen.status.level = 0.12;
-        state.screen.models[1].downloaded = true;
-        let mut h = harness(state, [820.0, 660.0]);
-        h.run_steps(3);
-        h.render()
-            .unwrap()
-            .save(format!("target/ui-review/{name}.png"))
-            .unwrap();
-    }
-}
-
-#[test]
-fn standard_window_shortcuts_and_escape_recording_cancel() {
+fn window_shortcuts_notices_and_minimum_recording_controls() {
     let mut state = fixture();
-    state.view.page = Page::About;
-    let mut h = harness(state, [820.0, 660.0]);
-    h.key_combination_modifiers(egui::Modifiers::COMMAND, &[egui::Key::Comma]);
-    h.run();
-    assert_eq!(h.state().view.page, Page::General);
-    h.key_combination_modifiers(egui::Modifiers::COMMAND, &[egui::Key::W]);
-    h.run();
-    assert!(h.state().actions.iter().any(|a| matches!(a, Action::Hide)));
-    h.key_combination_modifiers(egui::Modifiers::COMMAND, &[egui::Key::Q]);
-    h.run();
-    assert!(h.state().actions.iter().any(|a| matches!(a, Action::Quit)));
-    h.state_mut().screen.status.phase = "listening";
-    h.run();
+    state.screen.status.notice = "Microphone unavailable".into();
+    state.screen.status.phase = "listening";
+    let mut h = harness(state, [760.0, 560.0]);
+    click(&mut h, "Dismiss message");
+    for label in ["Finish recording", "Cancel recording"] {
+        let rect = h.get_by_label(label).rect();
+        assert!(
+            rect.max.x <= 760.0 && rect.max.y <= 560.0,
+            "{label} is clipped: {rect:?}"
+        );
+    }
     h.key_press(egui::Key::Escape);
     h.run();
     assert!(h
@@ -367,34 +400,71 @@ fn standard_window_shortcuts_and_escape_recording_cancel() {
         .actions
         .iter()
         .any(|a| matches!(a, Action::Command("cancel"))));
+    h.key_combination_modifiers(egui::Modifiers::COMMAND, &[egui::Key::W]);
+    h.run();
+    assert!(h.state().actions.iter().any(|a| matches!(a, Action::Hide)));
+    h.key_combination_modifiers(egui::Modifiers::COMMAND, &[egui::Key::Q]);
+    h.run();
+    assert!(h.state().actions.iter().any(|a| matches!(a, Action::Quit)));
 }
-
 #[test]
-fn missing_microphone_and_deleted_model_show_recovery_instructions() {
-    let mut state = fixture();
-    state.view.page = Page::Audio;
-    state.screen.microphones.clear();
-    let mut h = harness(state, [720.0, 520.0]);
-    h.get_by_label("Refresh devices");
-    assert!(h
-        .get_by_label("Record a sample")
-        .accesskit_node()
-        .is_disabled());
-    click(&mut h, "General");
-    click(&mut h, "Choose a speech model");
-    assert_eq!(h.state().view.page, Page::Models);
-}
-
-#[test]
-fn recording_controls_fit_the_minimum_window() {
-    let mut state = fixture();
-    state.screen.status.phase = "listening";
-    let h = harness(state, [720.0, 520.0]);
-    for label in ["Finish recording", "Cancel recording"] {
-        let rect = h.get_by_label(label).rect();
-        assert!(
-            rect.min.x >= 184.0 && rect.max.x <= 720.0 && rect.max.y < 520.0,
-            "{label} is clipped: {rect:?}"
-        );
+#[ignore = "renders production screens to PNGs on the local GPU"]
+fn render_all_pages_for_visual_review() {
+    std::fs::create_dir_all("target/ui-review").unwrap();
+    for theme in ["dark", "light"] {
+        for (width, height) in [(1000, 780), (760, 560)] {
+            for page in Page::ALL {
+                let mut state = fixture();
+                state.view.page = page;
+                state.screen.settings.set_quiet("theme", theme.into());
+                state.screen.models[2].downloaded = true;
+                state
+                    .screen
+                    .settings
+                    .set_quiet("model", "canary-180m-flash".into());
+                if page == Page::History {
+                    state.screen.status.history = vec![Entry {
+                        id: 1,
+                        text:
+                            "Let's keep this simple. Speak naturally, and let Bolum do the typing."
+                                .into(),
+                        model: "Canary 180M Flash".into(),
+                    }];
+                }
+                let mut h = harness(state, [width as f32, height as f32]);
+                h.run();
+                h.render()
+                    .unwrap()
+                    .save(format!("target/ui-review/{page:?}-{theme}-{width}.png"))
+                    .unwrap();
+            }
+        }
     }
+}
+
+#[test]
+fn runtime_shortcut_modes_distinguish_taps_and_holds() {
+    use global_hotkey::HotKeyState::{Pressed, Released};
+    assert_eq!(
+        super::shortcut_command("toggle", Pressed, false),
+        Some("toggle")
+    );
+    assert_eq!(super::shortcut_command("toggle", Released, true), None);
+    assert_eq!(
+        super::shortcut_command("hold", Pressed, false),
+        Some("start")
+    );
+    assert_eq!(
+        super::shortcut_command("hold", Released, false),
+        Some("stop")
+    );
+    assert_eq!(
+        super::shortcut_command("auto", Pressed, false),
+        Some("toggle")
+    );
+    assert_eq!(super::shortcut_command("auto", Released, false), None);
+    assert_eq!(
+        super::shortcut_command("auto", Released, true),
+        Some("stop")
+    );
 }

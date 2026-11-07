@@ -160,10 +160,17 @@ pub fn inject(text: &str, settings: &SettingsStore) -> Result<()> {
             write_clipboard(&payload)?;
             std::thread::sleep(std::time::Duration::from_millis(80));
             send_key(tool, "paste")?;
+            if settings.bool("auto_submit") {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                send_key(tool, "enter")?;
+            }
             Ok(())
         }
         _ => {
             type_text(tool, &payload)?;
+            if settings.bool("auto_submit") {
+                send_key(tool, "enter")?;
+            }
             Ok(())
         }
     }
