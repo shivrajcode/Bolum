@@ -11,7 +11,7 @@ license = "MIT"
 name = "bolum_lib"
 
 [dependencies]
-eframe = { version = "0.33.3", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }
+eframe = { version = "0.33.3", default-features = false, features = ["accesskit", "default_fonts", "glow", "x11", "wayland"] }
 global-hotkey = "0.7"
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util"] }
@@ -32,6 +32,7 @@ tray-icon = { version = "0.21", default-features = false }
 arboard = { version = "3", default-features = false }
 
 [dev-dependencies]
+egui_kittest = { version = "0.33.3", features = ["wgpu"] }
 hound = "3.5"
 http = "1"
 

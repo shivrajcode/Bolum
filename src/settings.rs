@@ -44,6 +44,11 @@ pub struct SettingsStore {
     value: Map<String, Value>,
 }
 impl SettingsStore {
+    #[cfg(test)]
+    pub fn load_defaults() -> Self {
+        Self::from_value(defaults())
+    }
+
     pub fn load() -> Self {
         let stored = std::fs::read(settings_path())
             .ok()

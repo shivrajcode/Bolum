@@ -171,6 +171,7 @@ pub fn inject(text: &str, settings: &SettingsStore) -> Result<()> {
 
 /// Prompts for the Accessibility permission up front so the first dictation
 /// is not the moment macOS asks for it.
+#[cfg(target_os = "macos")]
 pub fn request_permissions() -> Result<()> {
     #[cfg(target_os = "macos")]
     native::request_permissions()?;

@@ -69,8 +69,11 @@ impl Controller {
                 };
                 let result: Result<()> = (|| {
                     match command {
-                        "start" if phase == "idle" => {
-                            let config = settings.lock().unwrap().clone();
+                        "start" | "start_preview" if phase == "idle" => {
+                            let mut config = settings.lock().unwrap().clone();
+                            if command == "start_preview" {
+                                config.set_quiet("injection", "none".into());
+                            }
                             let model = models::find(&config.str("model"))?;
                             if !models::is_downloaded(model) {
                                 bail!("Download {} in Models first", model.name);
