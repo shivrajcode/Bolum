@@ -23,10 +23,18 @@ preferred. Downloads resume and each newly downloaded artifact is checked agains
 pinned SHA-256. The first transcription loads the model; subsequent recordings reuse it.
 Models unload after 60 seconds idle. Recordings stop automatically at two minutes.
 
+The light lavender interface has separate General, Speech models, Audio input, Last
+dictation, and About & permissions sections. On macOS it uses the installed San Francisco
+font. In **Audio input**, choose **Record a sample** to test your microphone and model
+without inserting text into another app.
+
 The window displays errors and the last transcript, which can be copied if insertion fails.
 Transcripts and recordings are not written to disk. Paste mode replaces the system clipboard.
 Closing the window quits the app; **Hide to tray** keeps it running on macOS and Windows.
 Linux currently uses the normal window/minimize controls rather than a system tray.
+Command-comma opens General, Command-W hides the window when the tray is available,
+Command-Q quits, and Escape cancels an active recording. On other platforms, the command
+shortcuts use Control.
 
 ### macOS
 
@@ -87,7 +95,7 @@ artifacts in decimal MB. CPU inference avoids shipping CUDA, PyTorch, or NeMo. R
 builds use size optimization, LTO, one codegen unit, and stripped symbols. ONNX Runtime
 is still a substantial native dependency, so model size and app size must be reported
 separately. Measure a build with `wc -c target/release/bolum` and `du -sh target/bundle/Bolum.app`.
-The verified local Apple Silicon release executable is 24,850,896 bytes (about 25 MB);
+The verified local Apple Silicon release executable is 25,053,312 bytes (about 25 MB);
 the macOS app bundle is approximately the same size, excluding models. Other platforms
 need their own measurements. Actual memory use during inference is larger than the model files.
 
@@ -127,8 +135,8 @@ cargo run --release --example transcribe -- canary-180m-flash tests/fixtures/qui
 ```
 
 CI checks formatting, lint, tests, and release compilation on macOS, Windows, and Linux.
-It uploads build artifacts; it does not automatically publish releases. Live microphone,
-shortcut, permissions, and insertion behavior need an interactive test on each platform.
+It uploads build artifacts; it does not automatically publish releases. See [UI verification](docs/ui-verification.md) for interaction coverage, visual review,
+live macOS checks, and remaining platform/permission checks.
 
 ## Architecture and research
 
