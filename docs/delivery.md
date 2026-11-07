@@ -49,3 +49,12 @@ The workflow uses GitHub's short-lived token with read-only access for builds an
 write permissions for publishing. No personal access token is required. GitHub Pages is
 configured to deploy with Actions. Signing/notarization certificates are not configured;
 these installers therefore retain the documented unknown-publisher prompts.
+
+## Documentation hostname
+
+Deployment is currently gated by the repository variable `DOCS_SITE_READY`. It remains
+off while the requested `bolum.github.io` hostname is unresolved: that address belongs
+to the existing GitHub user `bolum`, which the connected account does not control.
+Repository documentation links are used in the meantime. Do not set the gate to `true`
+until the intended hostname and its publishing repository are configured; merely changing
+link text cannot give a project ownership of another account's github.io address.

@@ -20,7 +20,11 @@ trap 'rm -rf "$pkg_root"' EXIT
 ditto "$app" "$pkg_root/Bolum.app"
 pkgbuild --analyze --root "$pkg_root" target/bundle/components.plist
 # Always install in Applications, even if a development copy exists elsewhere.
-/usr/libexec/PlistBuddy -c 'Set :0:BundleIsRelocatable false' target/bundle/components.plist
+if /usr/libexec/PlistBuddy -c 'Print :0:BundleIsRelocatable' target/bundle/components.plist >/dev/null 2>&1; then
+  /usr/libexec/PlistBuddy -c 'Set :0:BundleIsRelocatable false' target/bundle/components.plist
+else
+  /usr/libexec/PlistBuddy -c 'Add :0:BundleIsRelocatable bool false' target/bundle/components.plist
+fi
 pkgbuild --root "$pkg_root" --component-plist target/bundle/components.plist --install-location /Applications --identifier computer.bolum.app --version "$version" "$pkg"
 codesign --verify --deep --strict "$app"
 if [ "${CI:-false}" = true ]; then

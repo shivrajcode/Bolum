@@ -99,6 +99,8 @@ jobs:
         run: bash scripts/publish-release.sh
   documentation:
     name: Deploy documentation
+    # Enable after the requested documentation domain is connected to this repository.
+    if: vars.DOCS_SITE_READY == 'true'
     needs: publish
     runs-on: ubuntu-latest
     permissions:

@@ -21,7 +21,7 @@ This build is not code-signed. Windows may show an unknown-publisher warning.
 Only approve an app you downloaded from https://github.com/shivrajcode/Bolum/releases.
 Microphone access must be enabled for desktop apps in Windows Settings.
 
-Documentation: https://shivrajcode.github.io/Bolum/
+Documentation: https://github.com/shivrajcode/Bolum/tree/main/docs
 Speech models are downloaded separately; no Python, browser runtime or account
 is required. Session history is cleared when Bolum exits.
 '@ | Set-Content "$stage/README.txt"
