@@ -15,7 +15,7 @@ VIAddVersionKey "LegalCopyright" "Copyright 2026 shivraj598"
 !define MUI_FINISHPAGE_RUN "$INSTDIR\bolum.exe"
 !define MUI_FINISHPAGE_RUN_NOTCHECKED
 !insertmacro MUI_PAGE_WELCOME
-!insertmacro MUI_PAGE_LICENSE "${__FILEDIR__}\..\LICENSE"
+!insertmacro MUI_PAGE_LICENSE "${STAGE}\LICENSE"
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
