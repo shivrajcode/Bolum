@@ -2,86 +2,107 @@
 
 Verified locally on macOS / Apple Silicon, 2026-11-07.
 
-## Interface
+## Implemented interface
 
-The production Rust/egui interface uses a light lavender sidebar and selection color,
-neutral content surfaces, native window controls, and the installed San Francisco font
-on macOS. Fonts are read from the OS rather than packaged with Bolum. The five sections
-are General, Speech models, Audio input, Last dictation, and About & permissions.
-The layout borrows the straightforward settings organization of
-[Handy](https://github.com/cjpais/Handy). It is rendered in Rust, not a webview or an AppKit
-control implementation.
+The Rust/egui layout follows the supplied Handy references: General, History, Models,
+Advanced, About; an icon sidebar; grouped settings rows; switches; and a persistent model
+footer. Purple replaces pink throughout light and dark appearance. System appearance is
+also available. macOS uses its installed San Francisco fonts without bundling font files.
+Phosphor supplies the small, consistent icon set. No webview or JavaScript was added.
 
-## Automated interaction tests
+General includes keyboard shortcut capture and reset, Auto/toggle/hold behavior, Canary
+source language and English translation, microphone selection, feedback tones and volume,
+and a sample-recording flow. macOS output muting restores its previous state on stop,
+cancel, and normal application quit. Escape can cancel a recording globally on supported
+desktops. The optional floating overlay does not focus the main settings window.
 
-`cargo test --locked --all-targets` passes 35 tests. Twelve exercise the actual production
-view with egui_kittest using pointer events, keyboard events, and accessibility queries:
+Models separates installed and downloadable weights, with a real search field, language
+filter, active-model treatment, download progress, cancellation and removal confirmation.
+Model speed/accuracy scores are not displayed because the app has no measured benchmarks.
+Only the supported Parakeet and Canary models are listed.
+
+Advanced controls map to working app behavior: start hidden when a tray exists, recording
+overlay, model unload delay, insertion strategy, optional Enter after insertion,
+energy-based quiet-edge detection, English filler removal, exact word corrections, and
+bounded session history. The history is kept in memory and never writes recordings or
+transcripts to disk. Startup registration, streaming, cloud cleanup, arbitrary clipboard
+format restoration, and automatic updates are not implemented or presented as working
+features.
+
+## Automated checks
+
+`cargo test --locked --all-targets`: **40 passed**, with the GPU review and real-download
+integration tests opt-in. UI coverage includes ten interaction workflows plus the runtime
+shortcut mode transitions. The production view is tested using actual pointer/keyboard
+events and accessibility queries, without OS or network side effects:
 
 | Area | Verified behavior |
 | --- | --- |
-| Navigation | All five sections and the first-run model setup link |
-| Shortcut | Invalid input stays inline; valid input emits registration intent |
-| Preferences | Hold-to-talk, trailing space, and all three delivery modes save correctly |
-| Models | Download/cancel, selection, Canary language, and two-step removal |
-| Audio | Device selection, refresh, sample-recording intent, stop and cancel |
-| Missing setup | Missing microphone and model show recovery controls |
-| Busy state | Settings lock during transcription; navigation remains available |
-| Transcript | Empty state, microphone-test link, copy and clear actions |
-| Notices | Dismiss control emits the correct action |
-| Window/permissions | Hide, quit, and permission buttons emit the correct actions |
-| Keyboard | Tab focus, Command-comma, Command-W, Command-Q, Escape cancellation |
-| Small windows | Recording buttons fit within the minimum 720 × 520 viewport |
+| Navigation | All sections, setup recovery, model footer |
+| Shortcut | Capture, modifier validation, reset, Auto/toggle/hold command mapping |
+| Sound settings | Microphone selection/refresh, feedback switch, output device |
+| Recording | Sample intent, stop/cancel, busy-state locking and navigation |
+| Models | Download/cancel, active selection, removal confirmation, Canary language/translation |
+| Search/filter | Name matching, empty results, multilingual filter |
+| Advanced | Unload timing, start hidden, overlay, insertion mode, cleanup, history limits |
+| History | Empty state, latest transcript, copy/delete/clear action routing |
+| Appearance/About | Light/dark/system, permissions, source and data-folder actions |
+| Window/keyboard | Hide/quit shortcuts, Escape, notices and minimum-width recording controls |
 
-These tests do not grant OS permissions, change the real clipboard, delete models, or
-perform network downloads. Production action handlers route their intents to the existing
-Rust services. Tests and rendering dependencies are development-only.
+Settings regression tests verify that a saved microphone choice survives reload and that
+invalid null values do not erase typed defaults. Transcription helper tests verify exact
+word boundaries, preservation of original whitespace when cleanup is disabled, silence
+trimming, and history bounds.
 
-Strict Clippy, formatting, and whitespace checks also pass.
+Strict Clippy, formatting, and whitespace checks pass.
 
-## Visual checks
+## Visual review
 
-The actual view was rendered and inspected at 820 × 660 and 720 × 520 for all five
-sections, plus recording and transcription states. Language selection was moved into
-the Canary row so it stays next to the selected model. Recording controls wrap at narrow
-widths. Content scrolls vertically when it exceeds the available height.
-
-To reproduce PNGs under `target/ui-review/`:
+All five production screens were rendered in light and dark modes at 1000 × 780 and
+760 × 560, generating twenty review images. Recording controls are also checked against
+the minimum viewport. Large content sections scroll vertically.
 
 ```sh
 cargo test --lib ui::tests::render_all_pages_for_visual_review -- --ignored
 ```
 
-These images render production widgets through the test GPU renderer; they are not
-screenshots of macOS window chrome. OS window screenshot capture was unavailable in this
-session. Pixel snapshots are kept out of the repository and installer.
+PNGs are under `target/ui-review/`, excluded from source control and the installer.
+They render the actual production widgets through the test GPU renderer; they are not
+screenshots of macOS chrome. OS window screenshot capture was unavailable in this session.
 
-## Packaged application checks
+## Live macOS checks
 
-Using an isolated `XDG_CONFIG_HOME` and the installed Canary model:
+Using an isolated configuration and the installed Canary model:
 
-- Launched the packaged `.app` successfully with the macOS system font.
-- Opened all five sections through the native accessibility tree.
-- Resized the real window to its 720 × 520 minimum.
-- Refreshed microphone devices.
-- Hid the window to the menu bar and restored it with `bolum show`.
+- Launched the packaged `.app` with system fonts.
+- Opened General, History, Models, Advanced, and About through the native accessibility tree.
+- Resized to the 760 × 560 minimum and refreshed microphone devices.
+- Hid the settings window to the menu bar and restored it using `bolum show`.
 - Started and finished a microphone sample through the real UI.
+- Confirmed the floating recording window appeared.
+- Confirmed system output muted during recording and returned to its original state on Stop.
+- Quit during a second active recording and confirmed the original mute state was restored.
+- With Finder focused, used Control-Option-Space to start/stop recording and global Escape
+  to cancel; the control socket confirmed the expected listening/idle transitions.
 
-The sample path overrides insertion to `none` for that recording, so the test does not
-paste into another app and does not change the user's saved delivery preference.
+The sample tests used insertion `none`, so no text was sent to other applications. The
+application now explicitly asks its worker to finish recording cleanup on exit, with a
+bounded wait to avoid hanging quit during model inference.
 
-Separately, the opt-in inference integration test passed for Canary 180M Flash and
-Parakeet v3. Both produced: “The quick brown fox jumps over the lazy dog.”
+## Model inference
+
+The opt-in integration test passes for Canary 180M Flash and Parakeet v3. Both recognize
+“The quick brown fox jumps over the lazy dog.” from the fixture.
 
 ```sh
 XDG_DATA_HOME=/tmp/bolum-smoke-data XDG_CONFIG_HOME=/tmp/bolum-smoke-config \
   cargo test --test smoke -- --ignored --nocapture
 ```
 
-## Remaining platform checks
+## Limits
 
-Cross-application typing and pasting remain unverified because macOS Accessibility
-access was unavailable for text injection in this session. Permission buttons are wired,
-but a human must grant permission in System Settings. Live shortcut interception and
-permission-denial/recovery behavior still need testing across other app focus states.
-Windows and Linux native windows were not exercised locally; CI runs the platform build,
-lint, and headless test suite. macOS 13.4 compatibility requires a machine on that OS.
+Cross-application typing/pasting still needs validation after granting Bolum Accessibility
+access. Native permission-denial/recovery, feedback tone routing across different hardware,
+non-English translation accuracy, and Windows/Linux live windows are not fully validated
+here. The interface and decoder routing are tested; this does not establish recognition
+accuracy for every language or microphone. macOS 13.4 compatibility needs that OS.

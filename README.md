@@ -17,19 +17,29 @@ Install stable Rust (1.92+) and your platform's native build tools, then:
 cargo run --release
 ```
 
-Open **Models**, download one model, select **Use this model**, and focus a text field in
+Open **Models**, download one model, select **Use model**, and focus a text field in
 another app. The default shortcut is **Control + Alt + Space**. Enable hold-to-talk if
 preferred. Downloads resume and each newly downloaded artifact is checked against its
 pinned SHA-256. The first transcription loads the model; subsequent recordings reuse it.
-Models unload after 60 seconds idle. Recordings stop automatically at two minutes.
+Models unload after 60 seconds idle by default; change this in Advanced. Recordings stop
+automatically at two minutes. Auto shortcut mode supports a tap to toggle or a hold to talk.
 
-The light lavender interface has separate General, Speech models, Audio input, Last
-dictation, and About & permissions sections. On macOS it uses the installed San Francisco
-font. In **Audio input**, choose **Record a sample** to test your microphone and model
+The Handy-inspired interface has General, History, Models, Advanced, and About sections,
+with purple accents, grouped settings rows, an icon sidebar, and a persistent model footer.
+Choose System, Light, or Dark appearance in About. On macOS it uses the installed San
+Francisco font. In **General**, choose **Record a sample** to test your microphone and model
 without inserting text into another app.
 
+General includes shortcut capture, Auto / toggle / hold behavior, Canary language and
+English translation, microphone selection, feedback tones and volume. macOS can temporarily
+mute output during recording and restores the previous state on stop, cancel, or normal quit.
+Advanced includes the recording overlay, model-unload timing, insertion mode, optional Enter
+after insertion, energy-based quiet-edge trimming, English filler removal, exact custom-word
+corrections, and the session-history limit. No extra cloud service is involved.
+
 The window displays errors and the last transcript, which can be copied if insertion fails.
-Transcripts and recordings are not written to disk. Paste mode replaces the system clipboard.
+Transcripts and recordings are not written to disk. History keeps up to 20 entries in memory
+by default (configurable up to 100, or Off); quitting clears it. Paste mode replaces the system clipboard.
 Closing the window quits the app; **Hide to tray** keeps it running on macOS and Windows.
 Linux currently uses the normal window/minimize controls rather than a system tray.
 Command-comma opens General, Command-W hides the window when the tray is available,
@@ -95,7 +105,7 @@ artifacts in decimal MB. CPU inference avoids shipping CUDA, PyTorch, or NeMo. R
 builds use size optimization, LTO, one codegen unit, and stripped symbols. ONNX Runtime
 is still a substantial native dependency, so model size and app size must be reported
 separately. Measure a build with `wc -c target/release/bolum` and `du -sh target/bundle/Bolum.app`.
-The verified local Apple Silicon release executable is 25,053,312 bytes (about 25 MB);
+The verified local Apple Silicon release executable is 25,710,368 bytes (about 26 MB);
 the macOS app bundle is approximately the same size, excluding models. Other platforms
 need their own measurements. Actual memory use during inference is larger than the model files.
 
